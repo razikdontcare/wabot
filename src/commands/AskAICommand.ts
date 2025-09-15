@@ -291,7 +291,7 @@ export class AskAICommand extends CommandInterface {
       base_prompt +=
         "\n\n### Bot Command Access\nYou have access to various bot commands through these tools:\n- `get_bot_commands(query?)` - Get list of available bot commands (optionally filtered)\n- `get_command_help(commandName)` - Get detailed help for a specific command\n- `execute_bot_command(commandName, args)` - Execute a bot command safely\n\n**Command Usage Guidelines:**\n- Use `get_bot_commands()` when users ask about available features or \"what can this bot do?\"\n- Use `get_command_help()` when users need help with a specific command\n- Use `execute_bot_command()` when users want to perform actions like downloading, searching, or playing games\n- Always explain what you're doing when executing commands\n- Be helpful and proactive in suggesting relevant commands\n\n**Safety Notes:**\n- Some commands may not be available in all contexts\n- Command execution respects user permissions and cooldowns\n- Game commands won't work if another game is already running\n- Admin commands are restricted\n\n";
 
-      base_prompt += "Current Date : " + new Date().toISOString() + "\n\n";
+      base_prompt += "Current Date : " + new Date().toString() + "\n\n";
       // Build messages array for Groq API
       const messages: any[] = [
         {
@@ -479,11 +479,12 @@ export class AskAICommand extends CommandInterface {
         const secondResponse = await this.ai.chat.completions.create({
           messages,
           model: this.MODEL,
-          temperature: 0.6,
-          max_completion_tokens: 4096,
-          top_p: 1,
+          temperature: 0.4,
+          max_completion_tokens: 1024,
+          top_p: 0.95,
           stream: false,
           stop: null,
+          seed: 28112004,
         });
 
         return (
