@@ -81,6 +81,7 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
   };
 
   private BASE_URL = "https://cobalt.razik.net";
+  private TIKTOK_BASE_URL = "https://ttdl.razik.net/api/cobalt";
   private client = axios.create({
     baseURL: this.BASE_URL,
     timeout: 15000, // Increased timeout for better reliability
@@ -326,13 +327,24 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
 
   private async makeRequestWithRetry(
     requestBody: CobaltRequestBody,
-    maxRetries: number = 2
+    maxRetries: number = 2,
+    endpoint?: string
   ): Promise<AxiosResponse<CobaltResponse>> {
     let lastError: any;
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
       try {
-        const response = await this.client.post(`/`, requestBody);
+        const targetUrl = endpoint ? endpoint : `${this.BASE_URL}/`;
+        const response = await axios.post(targetUrl, requestBody, {
+          timeout: 15000,
+          family: 4,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "WhatsApp-FunBot/1.0.0",
+          },
+          validateStatus: (status) => (status ?? 0) < 500,
+        });
         return response as AxiosResponse<CobaltResponse>;
       } catch (error) {
         lastError = error;
@@ -392,7 +404,13 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
         filenameStyle: "basic", // Set default filename style
       };
 
-      const response = await this.makeRequestWithRetry(requestBody);
+      const isTikTok = this.isTikTokUrl(url);
+      const endpoint = isTikTok ? this.TIKTOK_BASE_URL : `${this.BASE_URL}/`;
+      const response = await this.makeRequestWithRetry(
+        requestBody,
+        2,
+        endpoint
+      );
 
       // Handle error responses with detailed error messages
       if (response.data.status === "error") {
@@ -544,6 +562,19 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
       return new Error(
         "Ada error yang gak jelas nih pas download media. Mystery error! 👻"
       );
+    }
+  }
+
+  private isTikTokUrl(input: string): boolean {
+    try {
+      const hostname = new URL(input).hostname.toLowerCase();
+      return (
+        hostname === "tiktok.com" ||
+        hostname.endsWith(".tiktok.com") ||
+        hostname.includes("tiktok.com")
+      );
+    } catch {
+      return false;
     }
   }
 }
