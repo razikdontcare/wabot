@@ -323,13 +323,48 @@ export class YtDlpWrapper {
     output: string,
     onProgress: (progress: DownloadProgress) => void
   ): void {
-    // yt-dlp progress format: [download]   45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
-    // Also handles: [download]  45.2% of ~123.45MiB at  1.23MiB/s ETA 00:45
-    const progressMatch = output.match(
-      /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*([\w]+)?\s+at\s+(\d+\.?\d*)\s*([\w]+)\/s\s+ETA\s+(\d+):(\d+)/
+    // yt-dlp progress format variations:
+    // [download]   45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
+    // [download]  45.2% of ~123.45MiB at  1.23MiB/s ETA 00:45
+    // [download]   45.2% of   123.45MiB at   1.23MiB/s ETA 00:45
+
+    // Primary pattern with units
+    let progressMatch = output.match(
+      /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s\s+ETA\s+(\d+):(\d+)/
     );
 
-    if (progressMatch) {
+    // Fallback pattern without explicit units (assumes MiB default)
+    if (!progressMatch) {
+      progressMatch = output.match(
+        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s+at\s+(\d+\.?\d*)\/s\s+ETA\s+(\d+):(\d+)/
+      );
+
+      if (progressMatch) {
+        // Reformat to match expected groups (no unit groups, so shift indices)
+        const percent = parseFloat(progressMatch[1]);
+        const totalSize = parseFloat(progressMatch[2]);
+        const speed = parseFloat(progressMatch[3]);
+        const etaMinutes = parseInt(progressMatch[4], 10);
+        const etaSeconds = parseInt(progressMatch[5], 10);
+
+        // Use default MiB units
+        const totalBytes = this.convertToBytes(totalSize, "MiB");
+        const speedBytes = this.convertToBytes(speed, "MiB");
+        const downloadedBytes = (totalBytes * percent) / 100;
+        const etaTotal = etaMinutes * 60 + etaSeconds;
+
+        onProgress({
+          percent,
+          downloadedBytes,
+          totalBytes,
+          speed: speedBytes,
+          eta: etaTotal,
+        });
+        return;
+      }
+    }
+
+    if (progressMatch && progressMatch.length >= 7) {
       const percent = parseFloat(progressMatch[1]);
       const totalSize = parseFloat(progressMatch[2]);
       const totalUnit = progressMatch[3] || "MiB";
@@ -338,9 +373,20 @@ export class YtDlpWrapper {
       const etaMinutes = parseInt(progressMatch[6], 10);
       const etaSeconds = parseInt(progressMatch[7], 10);
 
+      // Validate parsed values
+      if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
+        return;
+      }
+
       // Convert to bytes
       const totalBytes = this.convertToBytes(totalSize, totalUnit);
       const speedBytes = this.convertToBytes(speed, speedUnit);
+
+      // Prevent division by zero or invalid calculations
+      if (totalBytes === 0) {
+        return;
+      }
+
       const downloadedBytes = (totalBytes * percent) / 100;
       const etaTotal = etaMinutes * 60 + etaSeconds;
 
@@ -355,6 +401,11 @@ export class YtDlpWrapper {
   }
 
   private convertToBytes(value: number, unit: string): number {
+    // Validate input
+    if (isNaN(value) || value < 0) {
+      return 0;
+    }
+
     const units: { [key: string]: number } = {
       B: 1,
       KiB: 1024,
@@ -364,7 +415,10 @@ export class YtDlpWrapper {
       MB: 1000 * 1000,
       GB: 1000 * 1000 * 1000,
     };
-    return value * (units[unit] || 1);
+
+    // Return bytes value, default to MiB if unit is unknown
+    const multiplier = units[unit] || units['MiB'];
+    return value * multiplier;
   }
 
   private async cleanupTempFiles(

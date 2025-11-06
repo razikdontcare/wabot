@@ -113,7 +113,61 @@ export class YTDLCommand extends CommandInterface {
       // Track progress for ETA updates
       let lastProgressUpdate = 0;
       const progressUpdateInterval = 10000; // Update every 10 seconds
-      let progressMessageSent = false;
+      let isFirstProgress = true;
+      let isUpdating = false; // Prevent race conditions
+
+      // Progress callback function
+      const handleProgress = async (progress: any) => {
+        // Validate progress data
+        if (!progress || typeof progress.percent !== 'number' || typeof progress.speed !== 'number') {
+          log.warn("Invalid progress data received:", progress);
+          return;
+        }
+
+        const now = Date.now();
+        if (now - lastProgressUpdate > progressUpdateInterval && !isUpdating) {
+          isUpdating = true;
+          lastProgressUpdate = now;
+
+          try {
+            const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+
+            if (isFirstProgress) {
+              // First progress update: show full details
+              // Validate totalBytes and eta exist
+              if (progress.totalBytes && typeof progress.totalBytes === 'number') {
+                const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                const eta = progress.eta || 0;
+                const etaMinutes = Math.floor(eta / 60);
+                const etaSeconds = eta % 60;
+                const etaText = etaMinutes > 0
+                  ? `${etaMinutes}m ${etaSeconds}s`
+                  : `${etaSeconds}s`;
+
+                await sock.sendMessage(jid, {
+                  text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 Size: ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
+                });
+                isFirstProgress = false;
+              } else {
+                // Fallback if totalBytes is missing
+                await sock.sendMessage(jid, {
+                  text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n⚡ Speed: ${speedMBps} MB/s`,
+                });
+                isFirstProgress = false;
+              }
+            } else {
+              // Subsequent updates: simplified progress
+              await sock.sendMessage(jid, {
+                text: `📥 Progress: ${progress.percent.toFixed(1)}% | ⚡ ${speedMBps} MB/s`,
+              });
+            }
+          } catch (error) {
+            log.error("Failed to send progress message:", error);
+          } finally {
+            isUpdating = false;
+          }
+        }
+      };
 
       // Use optimized download with all speed enhancements and progress tracking
       const response =
@@ -122,56 +176,12 @@ export class YTDLCommand extends CommandInterface {
               audioOnly: true,
               useAria2c: true,
               concurrentFragments: 5,
-              onProgress: async (progress) => {
-                const now = Date.now();
-                if (now - lastProgressUpdate > progressUpdateInterval) {
-                  lastProgressUpdate = now;
-                  const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
-                  const downloadedMB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
-                  const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
-                  const etaMinutes = Math.floor(progress.eta / 60);
-                  const etaSeconds = progress.eta % 60;
-                  const etaText = etaMinutes > 0 
-                    ? `${etaMinutes}m ${etaSeconds}s` 
-                    : `${etaSeconds}s`;
-
-                  try {
-                    await sock.sendMessage(jid, {
-                      text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 ${downloadedMB}MB / ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
-                    });
-                    progressMessageSent = true;
-                  } catch (error) {
-                    // Ignore progress send errors
-                  }
-                }
-              },
+              onProgress: handleProgress,
             })
           : await this.ytdl.downloadToBuffer(url, {
               useAria2c: true,
               concurrentFragments: 5,
-              onProgress: async (progress) => {
-                const now = Date.now();
-                if (now - lastProgressUpdate > progressUpdateInterval) {
-                  lastProgressUpdate = now;
-                  const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
-                  const downloadedMB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
-                  const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
-                  const etaMinutes = Math.floor(progress.eta / 60);
-                  const etaSeconds = progress.eta % 60;
-                  const etaText = etaMinutes > 0 
-                    ? `${etaMinutes}m ${etaSeconds}s` 
-                    : `${etaSeconds}s`;
-
-                  try {
-                    await sock.sendMessage(jid, {
-                      text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 ${downloadedMB}MB / ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
-                    });
-                    progressMessageSent = true;
-                  } catch (error) {
-                    // Ignore progress send errors
-                  }
-                }
-              },
+              onProgress: handleProgress,
             });
 
       if (!response) {
