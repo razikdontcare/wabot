@@ -11,12 +11,18 @@ interface YtDlpOptions {
   format?: string;
   audioOnly?: boolean;
   outputTemplate?: string;
-  useAria2c?: boolean; // Use aria2c external downloader for parallel connections
-  aria2cArgs?: string; // Custom aria2c arguments
-  concurrentFragments?: number; // Concurrent fragments for HLS/DASH
-  quiet?: boolean; // Suppress progress and reduce logging overhead
-  streamToStdout?: boolean; // Stream output to stdout instead of file (experimental)
-  onProgress?: (progress: DownloadProgress) => void; // Progress callback
+    // Use aria2c external downloader for parallel connections
+  useAria2c?: boolean;
+    // Custom aria2c arguments
+  aria2cArgs?: string;
+    // Concurrent fragments for HLS/DASH
+  concurrentFragments?: number;
+    // Suppress progress and reduce logging overhead
+  quiet?: boolean;
+    // Stream output to stdout instead of file (experimental)
+  streamToStdout?: boolean;
+    // Progress callback
+  onProgress?: (progress: DownloadProgress) => void;
 }
 
 interface YtDlpResult {
@@ -29,8 +35,10 @@ interface DownloadProgress {
   percent: number;
   downloadedBytes: number;
   totalBytes: number;
-  speed: number; // bytes per second
-  eta: number; // estimated seconds remaining
+    // bytes per second
+  speed: number
+    // estimated seconds remaining
+  eta: number;
 }
 
 /**
@@ -152,11 +160,16 @@ export class YtDlpWrapper {
 
     // Performance: Reduce logging overhead
     // Don't suppress progress if callback is provided
-    if (options.quiet !== false && !options.onProgress) {
-      args.push("--no-progress");
-    }
-    if (options.quiet && !options.onProgress) {
-      args.push("-q");
+    if (!options.onProgress) {
+      if (options.quiet !== false) {
+        args.push("--no-progress");
+      }
+      if (options.quiet) {
+        args.push("-q");
+      }
+    } else {
+      // Force newline output for progress parsing
+      args.push("--newline");
     }
 
     // Add no-mtime flag
@@ -311,8 +324,9 @@ export class YtDlpWrapper {
     onProgress: (progress: DownloadProgress) => void
   ): void {
     // yt-dlp progress format: [download]   45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
+    // Also handles: [download]  45.2% of ~123.45MiB at  1.23MiB/s ETA 00:45
     const progressMatch = output.match(
-      /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)([\w]+)?\s+at\s+(\d+\.?\d*)([\w]+)\/s\s+ETA\s+(\d+):(\d+)/
+      /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*([\w]+)?\s+at\s+(\d+\.?\d*)\s*([\w]+)\/s\s+ETA\s+(\d+):(\d+)/
     );
 
     if (progressMatch) {

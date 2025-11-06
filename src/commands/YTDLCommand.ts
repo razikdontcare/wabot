@@ -70,16 +70,6 @@ export class YTDLCommand extends CommandInterface {
     const downloadMode = args.includes("audio") ? "audio" : "video";
     log.info("Download mode set to:", downloadMode);
 
-    if (!config.disableWarning) {
-      await sock.sendMessage(jid, {
-        text: `*Info Penting:*\nCommand ini sedang dalam tahap pengembangan. Proses pengunduhan mungkin memerlukan waktu yang lama tergantung pada ukuran file dan kecepatan koneksi server. 
-  
-  Video akan diunduh dengan kualitas maksimal 1080p untuk mengoptimalkan ukuran file dan kecepatan download.
-  
-  Gunakan command ini hanya jika media yang diunduh dengan "${BotConfig.prefix}dl" tidak berhasil.\n\nDemi kenyamanan, proses pengunduhan akan dibatasi maksimal 5 menit. Jika file terlalu besar, silakan gunakan command "${BotConfig.prefix}dl" untuk mengunduh media yang lebih besar.`,
-      });
-    }
-
     // 2. Try to extract URL from args or quoted message
     let url = extractUrlsFromText(args.join(" "))[0] || null;
     if (!url && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
