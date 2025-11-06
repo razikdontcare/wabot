@@ -117,22 +117,71 @@ export class YTDLCommand extends CommandInterface {
       const title = videoInfo.title || "Unknown";
 
       await sock.sendMessage(jid, {
-        text: `📹 *${title}*\n⏱️ Durasi: ${duration} menit\n🔄 Memulai download ${downloadMode}...\n⚡ Menggunakan download berkecepatan tinggi (aria2c + concurrent fragments)`,
+        text: `📹 *${title}*\n⏱️ Durasi: ${duration} menit\n🔄 Memulai download ${downloadMode}...`,
       });
 
-      // Use optimized download with all speed enhancements
+      // Track progress for ETA updates
+      let lastProgressUpdate = 0;
+      const progressUpdateInterval = 10000; // Update every 10 seconds
+      let progressMessageSent = false;
+
+      // Use optimized download with all speed enhancements and progress tracking
       const response =
         downloadMode === "audio"
           ? await this.ytdl.downloadToBuffer(url, {
               audioOnly: true,
               useAria2c: true,
               concurrentFragments: 5,
-              quiet: true,
+              onProgress: async (progress) => {
+                const now = Date.now();
+                if (now - lastProgressUpdate > progressUpdateInterval) {
+                  lastProgressUpdate = now;
+                  const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                  const downloadedMB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
+                  const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+                  const etaMinutes = Math.floor(progress.eta / 60);
+                  const etaSeconds = progress.eta % 60;
+                  const etaText = etaMinutes > 0 
+                    ? `${etaMinutes}m ${etaSeconds}s` 
+                    : `${etaSeconds}s`;
+
+                  try {
+                    await sock.sendMessage(jid, {
+                      text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 ${downloadedMB}MB / ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
+                    });
+                    progressMessageSent = true;
+                  } catch (error) {
+                    // Ignore progress send errors
+                  }
+                }
+              },
             })
           : await this.ytdl.downloadToBuffer(url, {
               useAria2c: true,
               concurrentFragments: 5,
-              quiet: true,
+              onProgress: async (progress) => {
+                const now = Date.now();
+                if (now - lastProgressUpdate > progressUpdateInterval) {
+                  lastProgressUpdate = now;
+                  const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                  const downloadedMB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
+                  const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+                  const etaMinutes = Math.floor(progress.eta / 60);
+                  const etaSeconds = progress.eta % 60;
+                  const etaText = etaMinutes > 0 
+                    ? `${etaMinutes}m ${etaSeconds}s` 
+                    : `${etaSeconds}s`;
+
+                  try {
+                    await sock.sendMessage(jid, {
+                      text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 ${downloadedMB}MB / ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
+                    });
+                    progressMessageSent = true;
+                  } catch (error) {
+                    // Ignore progress send errors
+                  }
+                }
+              },
             });
 
       if (!response) {

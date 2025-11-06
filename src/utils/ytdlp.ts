@@ -16,12 +16,21 @@ interface YtDlpOptions {
   concurrentFragments?: number; // Concurrent fragments for HLS/DASH
   quiet?: boolean; // Suppress progress and reduce logging overhead
   streamToStdout?: boolean; // Stream output to stdout instead of file (experimental)
+  onProgress?: (progress: DownloadProgress) => void; // Progress callback
 }
 
 interface YtDlpResult {
   buffer: Buffer;
   filename: string;
   metadata?: any;
+}
+
+interface DownloadProgress {
+  percent: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  speed: number; // bytes per second
+  eta: number; // estimated seconds remaining
 }
 
 /**
@@ -105,7 +114,8 @@ export class YtDlpWrapper {
       // Execute yt-dlp command with timeout
       const { stdout} = await this.executeCommandWithTimeout(
         args,
-        this.DOWNLOAD_TIMEOUT
+        this.DOWNLOAD_TIMEOUT,
+        options.onProgress
       );
 
       // Find the downloaded file
@@ -141,10 +151,11 @@ export class YtDlpWrapper {
     const args = ["yt-dlp"];
 
     // Performance: Reduce logging overhead
-    if (options.quiet !== false) {
+    // Don't suppress progress if callback is provided
+    if (options.quiet !== false && !options.onProgress) {
       args.push("--no-progress");
     }
-    if (options.quiet) {
+    if (options.quiet && !options.onProgress) {
       args.push("-q");
     }
 
@@ -227,7 +238,8 @@ export class YtDlpWrapper {
 
   private executeCommandWithTimeout(
     args: string[],
-    timeoutMs: number
+    timeoutMs: number,
+    onProgress?: (progress: DownloadProgress) => void
   ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const process = spawn(args[0], args.slice(1), {
@@ -257,10 +269,18 @@ export class YtDlpWrapper {
 
       process.stdout?.on("data", (data) => {
         stdout += data.toString();
+        // Parse progress from stdout if callback provided
+        if (onProgress) {
+          this.parseProgress(data.toString(), onProgress);
+        }
       });
 
       process.stderr?.on("data", (data) => {
         stderr += data.toString();
+        // yt-dlp outputs progress to stderr
+        if (onProgress) {
+          this.parseProgress(data.toString(), onProgress);
+        }
       });
 
       process.on("close", (code) => {
@@ -284,6 +304,53 @@ export class YtDlpWrapper {
         }
       });
     });
+  }
+
+  private parseProgress(
+    output: string,
+    onProgress: (progress: DownloadProgress) => void
+  ): void {
+    // yt-dlp progress format: [download]   45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
+    const progressMatch = output.match(
+      /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)([\w]+)?\s+at\s+(\d+\.?\d*)([\w]+)\/s\s+ETA\s+(\d+):(\d+)/
+    );
+
+    if (progressMatch) {
+      const percent = parseFloat(progressMatch[1]);
+      const totalSize = parseFloat(progressMatch[2]);
+      const totalUnit = progressMatch[3] || "MiB";
+      const speed = parseFloat(progressMatch[4]);
+      const speedUnit = progressMatch[5] || "MiB";
+      const etaMinutes = parseInt(progressMatch[6], 10);
+      const etaSeconds = parseInt(progressMatch[7], 10);
+
+      // Convert to bytes
+      const totalBytes = this.convertToBytes(totalSize, totalUnit);
+      const speedBytes = this.convertToBytes(speed, speedUnit);
+      const downloadedBytes = (totalBytes * percent) / 100;
+      const etaTotal = etaMinutes * 60 + etaSeconds;
+
+      onProgress({
+        percent,
+        downloadedBytes,
+        totalBytes,
+        speed: speedBytes,
+        eta: etaTotal,
+      });
+    }
+  }
+
+  private convertToBytes(value: number, unit: string): number {
+    const units: { [key: string]: number } = {
+      B: 1,
+      KiB: 1024,
+      MiB: 1024 * 1024,
+      GiB: 1024 * 1024 * 1024,
+      KB: 1000,
+      MB: 1000 * 1000,
+      GB: 1000 * 1000 * 1000,
+    };
+    return value * (units[unit] || 1);
   }
 
   private async cleanupTempFiles(

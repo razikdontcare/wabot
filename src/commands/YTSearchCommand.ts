@@ -72,18 +72,65 @@ export class YTSearchCommand extends CommandInterface {
       try {
         const { YtDlpWrapper } = await import("../utils/ytdlp.js");
         const ytdl = new YtDlpWrapper();
-        // Use optimized download with all speed enhancements
+
+        // Track progress for ETA updates
+        let lastProgressUpdate = 0;
+        const progressUpdateInterval = 10000; // Update every 10 seconds
+
+        // Use optimized download with all speed enhancements and progress tracking
         const result = isAudio
           ? await ytdl.downloadToBuffer(video.url, {
               audioOnly: true,
               useAria2c: true,
               concurrentFragments: 5,
-              quiet: true,
+              onProgress: async (progress) => {
+                const now = Date.now();
+                if (now - lastProgressUpdate > progressUpdateInterval) {
+                  lastProgressUpdate = now;
+                  const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                  const downloadedMB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
+                  const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+                  const etaMinutes = Math.floor(progress.eta / 60);
+                  const etaSeconds = progress.eta % 60;
+                  const etaText = etaMinutes > 0
+                    ? `${etaMinutes}m ${etaSeconds}s`
+                    : `${etaSeconds}s`;
+
+                  try {
+                    await sock.sendMessage(jid, {
+                      text: `📥 ${progress.percent.toFixed(1)}% | ${downloadedMB}/${sizeMB}MB | ${speedMBps} MB/s | ETA: ${etaText}`,
+                    });
+                  } catch (error) {
+                    // Ignore progress send errors
+                  }
+                }
+              },
             })
           : await ytdl.downloadToBuffer(video.url, {
               useAria2c: true,
               concurrentFragments: 5,
-              quiet: true,
+              onProgress: async (progress) => {
+                const now = Date.now();
+                if (now - lastProgressUpdate > progressUpdateInterval) {
+                  lastProgressUpdate = now;
+                  const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                  const downloadedMB = (progress.downloadedBytes / (1024 * 1024)).toFixed(1);
+                  const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+                  const etaMinutes = Math.floor(progress.eta / 60);
+                  const etaSeconds = progress.eta % 60;
+                  const etaText = etaMinutes > 0
+                    ? `${etaMinutes}m ${etaSeconds}s`
+                    : `${etaSeconds}s`;
+
+                  try {
+                    await sock.sendMessage(jid, {
+                      text: `📥 ${progress.percent.toFixed(1)}% | ${downloadedMB}/${sizeMB}MB | ${speedMBps} MB/s | ETA: ${etaText}`,
+                    });
+                  } catch (error) {
+                    // Ignore progress send errors
+                  }
+                }
+              },
             });
         const fileSizeMB = result.buffer.length / (1024 * 1024);
         if (fileSizeMB > 100) {
