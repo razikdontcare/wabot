@@ -23,6 +23,10 @@ interface YtDlpOptions {
   streamToStdout?: boolean;
     // Progress callback
   onProgress?: (progress: DownloadProgress) => void;
+    // Skip separate info fetch (assume already validated)
+  skipInfoFetch?: boolean;
+    // Pre-fetched video info to use for validation
+  videoInfo?: any;
 }
 
 interface YtDlpResult {
@@ -89,25 +93,45 @@ export class YtDlpWrapper {
     }
   }
 
+  /**
+   * Download video or audio to buffer with optimized performance.
+   *
+   * Performance Optimization:
+   * - Pass pre-fetched videoInfo to avoid redundant yt-dlp execution
+   * - If videoInfo is provided, skips the internal getVideoInfo() call
+   * - This eliminates one yt-dlp process execution, significantly improving performance
+   *
+   * @param url - Video URL to download
+   * @param options - Download options including optional pre-fetched videoInfo
+   * @returns Promise with buffer, filename and metadata
+   */
   async downloadToBuffer(
     url: string,
     options: YtDlpOptions = {}
   ): Promise<YtDlpResult> {
-    // Check video info first
-    const videoInfo = await this.getVideoInfo(url);
+    // Use pre-fetched video info if provided, or fetch it
+    let videoInfo = options.videoInfo;
 
-    // Check duration limit
-    if (videoInfo.duration && videoInfo.duration > this.MAX_DURATION) {
-      throw new Error(
-        `Video too long: ${Math.round(videoInfo.duration / 60)} minutes (max: ${
-          this.MAX_DURATION / 60
-        } minutes)`
-      );
+    if (!videoInfo && !options.skipInfoFetch) {
+      // Check video info first (only if not already provided)
+      videoInfo = await this.getVideoInfo(url);
     }
 
-    // Check if it's a live stream
-    if (videoInfo.is_live) {
-      throw new Error("Live streams are not supported");
+    // Validate video info if available
+    if (videoInfo) {
+      // Check duration limit
+      if (videoInfo.duration && videoInfo.duration > this.MAX_DURATION) {
+        throw new Error(
+          `Video too long: ${Math.round(videoInfo.duration / 60)} minutes (max: ${
+            this.MAX_DURATION / 60
+          } minutes)`
+        );
+      }
+
+      // Check if it's a live stream
+      if (videoInfo.is_live) {
+        throw new Error("Live streams are not supported");
+      }
     }
 
     // Generate temporary filename
@@ -142,7 +166,7 @@ export class YtDlpWrapper {
       return {
         buffer,
         filename: downloadedFile.name,
-        metadata: this.parseMetadata(stdout),
+        metadata: videoInfo || this.parseMetadata(stdout),
       };
     } catch (error) {
       // Clean up any partial downloads

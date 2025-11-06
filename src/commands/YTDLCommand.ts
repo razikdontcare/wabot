@@ -177,11 +177,13 @@ export class YTDLCommand extends CommandInterface {
               useAria2c: true,
               concurrentFragments: 5,
               onProgress: handleProgress,
+              videoInfo: videoInfo, // Pass pre-fetched info to avoid redundant fetch
             })
           : await this.ytdl.downloadToBuffer(url, {
               useAria2c: true,
               concurrentFragments: 5,
               onProgress: handleProgress,
+              videoInfo: videoInfo, // Pass pre-fetched info to avoid redundant fetch
             });
 
       if (!response) {
