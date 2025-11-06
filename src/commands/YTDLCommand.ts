@@ -117,13 +117,23 @@ export class YTDLCommand extends CommandInterface {
       const title = videoInfo.title || "Unknown";
 
       await sock.sendMessage(jid, {
-        text: `📹 *${title}*\n⏱️ Durasi: ${duration} menit\n🔄 Memulai download ${downloadMode}...`,
+        text: `📹 *${title}*\n⏱️ Durasi: ${duration} menit\n🔄 Memulai download ${downloadMode}...\n⚡ Menggunakan download berkecepatan tinggi (aria2c + concurrent fragments)`,
       });
 
+      // Use optimized download with all speed enhancements
       const response =
         downloadMode === "audio"
-          ? await this.ytdl.downloadAudio(url)
-          : await this.ytdl.downloadVideo(url);
+          ? await this.ytdl.downloadToBuffer(url, {
+              audioOnly: true,
+              useAria2c: true,
+              concurrentFragments: 5,
+              quiet: true,
+            })
+          : await this.ytdl.downloadToBuffer(url, {
+              useAria2c: true,
+              concurrentFragments: 5,
+              quiet: true,
+            });
 
       if (!response) {
         await sock.sendMessage(jid, {

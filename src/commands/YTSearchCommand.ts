@@ -72,9 +72,19 @@ export class YTSearchCommand extends CommandInterface {
       try {
         const { YtDlpWrapper } = await import("../utils/ytdlp.js");
         const ytdl = new YtDlpWrapper();
+        // Use optimized download with all speed enhancements
         const result = isAudio
-          ? await ytdl.downloadAudio(video.url)
-          : await ytdl.downloadVideo(video.url);
+          ? await ytdl.downloadToBuffer(video.url, {
+              audioOnly: true,
+              useAria2c: true,
+              concurrentFragments: 5,
+              quiet: true,
+            })
+          : await ytdl.downloadToBuffer(video.url, {
+              useAria2c: true,
+              concurrentFragments: 5,
+              quiet: true,
+            });
         const fileSizeMB = result.buffer.length / (1024 * 1024);
         if (fileSizeMB > 100) {
           await sock.sendMessage(jid, {

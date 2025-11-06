@@ -11,6 +11,11 @@ interface YtDlpOptions {
   format?: string;
   audioOnly?: boolean;
   outputTemplate?: string;
+  useAria2c?: boolean; // Use aria2c external downloader for parallel connections
+  aria2cArgs?: string; // Custom aria2c arguments
+  concurrentFragments?: number; // Concurrent fragments for HLS/DASH
+  quiet?: boolean; // Suppress progress and reduce logging overhead
+  streamToStdout?: boolean; // Stream output to stdout instead of file (experimental)
 }
 
 interface YtDlpResult {
@@ -19,14 +24,30 @@ interface YtDlpResult {
   metadata?: any;
 }
 
+/**
+ * YtDlpWrapper - Optimized yt-dlp wrapper for fast video/audio downloads
+ *
+ * Speed Optimizations:
+ * 1. aria2c external downloader: Parallel connections (-x 16 -s 16 -k 1M) for faster downloads
+ * 2. Concurrent fragments: Downloads HLS/DASH segments in parallel (--concurrent-fragments 5)
+ * 3. Pre-muxed formats: Prefers mp4/m4a to avoid ffmpeg remuxing overhead
+ * 4. Reduced logging: --no-progress and -q flags to minimize I/O overhead
+ * 5. Fragment retries: --fragment-retries 5 for robustness
+ * 6. Smart format selection: Prioritizes already-muxed formats over separate video+audio
+ *
+ * Requirements:
+ * - aria2c must be installed on the system for external downloader support
+ * - yt-dlp must be installed and accessible in PATH
+ */
 export class YtDlpWrapper {
   private cookiesFile: string;
-  private readonly DOWNLOAD_TIMEOUT = 300000; // 5 minutes timeout
-  private readonly MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
+  private readonly DOWNLOAD_TIMEOUT = 300000; // 5 minutes timeout// 100MB limit
   private readonly MAX_DURATION = 600; // 10 minutes limit
+  private useAria2c: boolean = true; // Enable aria2c by default for speed
 
-  constructor(cookiesFile: string = "cookies.txt") {
+  constructor(cookiesFile: string = "cookies.txt", useAria2c: boolean = true) {
     this.cookiesFile = cookiesFile;
+    this.useAria2c = useAria2c;
   }
 
   async getVideoInfo(url: string): Promise<any> {
@@ -34,8 +55,12 @@ export class YtDlpWrapper {
       "yt-dlp",
       "--dump-json",
       "--no-download",
+      "--no-progress",
+      "-q",
       "--cookies",
       this.cookiesFile,
+      "--js-runtimes",
+      "node",
       url,
     ];
 
@@ -78,7 +103,7 @@ export class YtDlpWrapper {
 
     try {
       // Execute yt-dlp command with timeout
-      const { stdout, stderr } = await this.executeCommandWithTimeout(
+      const { stdout} = await this.executeCommandWithTimeout(
         args,
         this.DOWNLOAD_TIMEOUT
       );
@@ -115,36 +140,65 @@ export class YtDlpWrapper {
   ): string[] {
     const args = ["yt-dlp"];
 
+    // Performance: Reduce logging overhead
+    if (options.quiet !== false) {
+      args.push("--no-progress");
+    }
+    if (options.quiet) {
+      args.push("-q");
+    }
+
     // Add no-mtime flag
     if (options.noMtime !== false) {
       args.push("--no-mtime");
     }
 
-    // Add sort parameter
+    // Add sort parameter - prefer pre-muxed formats to avoid ffmpeg remuxing
     if (options.sortBy) {
       args.push("-S", options.sortBy);
     } else {
-      args.push("-S", "ext");
+      args.push("-S", "ext:mp4:m4a");
     }
 
     // Add cookies file
     const cookiesFile = options.cookiesFile || this.cookiesFile;
     args.push("--cookies", cookiesFile);
 
-    // Add output template
-    args.push("-o", outputTemplate);
+    args.push("--js-runtimes", "node");
 
-    // Enhanced format selection
+    // Performance: Enable concurrent fragments for HLS/DASH streams
+    const concurrentFragments = options.concurrentFragments || 5;
+    args.push("--concurrent-fragments", String(concurrentFragments));
+
+    // Performance: Fragment retries for robustness
+    args.push("--fragment-retries", "5");
+
+    // Performance: Use aria2c external downloader for parallel connections
+    const useAria2c = options.useAria2c !== undefined ? options.useAria2c : this.useAria2c;
+    if (useAria2c) {
+      args.push("--downloader", "aria2c");
+      const aria2cArgs = options.aria2cArgs || "-x 16 -s 16 -k 1M";
+      args.push("--downloader-args", `aria2c:${aria2cArgs}`);
+    }
+
+    // Add output template or stream to stdout
+    if (options.streamToStdout) {
+      args.push("-o", "-");
+    } else {
+      args.push("-o", outputTemplate);
+    }
+
+    // Enhanced format selection - prefer pre-muxed formats to avoid ffmpeg merging
     if (options.format) {
       args.push("-f", options.format);
     } else if (options.audioOnly) {
-      // Priority: m4a > mp3 > any audio
+      // Priority: m4a > mp3 > any audio (m4a is pre-muxed)
       args.push("-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best");
     } else {
-      // Enhanced video format selection with WhatsApp compatibility
+      // Prefer pre-muxed mp4 formats to avoid ffmpeg remuxing overhead
       const videoFormats = [
-        "best[height<=1080][ext=mp4]",
-        "best[height<=720][ext=mp4]",
+        "best[ext=mp4][height<=1080]",
+        "best[ext=mp4][height<=720]",
         "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]",
         "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]",
         "best[height<=1080]",
