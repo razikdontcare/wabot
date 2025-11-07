@@ -64,9 +64,9 @@ export class YtDlpWrapper {
   private cookiesFile: string;
   private readonly DOWNLOAD_TIMEOUT = 300000; // 5 minutes timeout// 100MB limit
   private readonly MAX_DURATION = 600; // 10 minutes limit
-  private useAria2c: boolean = true; // Enable aria2c by default for speed
+  private useAria2c: boolean = false; // Enable aria2c by default for speed
 
-  constructor(cookiesFile: string = "cookies.txt", useAria2c: boolean = true) {
+  constructor(cookiesFile: string = "cookies.txt", useAria2c: boolean = false) {
     this.cookiesFile = cookiesFile;
     this.useAria2c = useAria2c;
   }
@@ -407,32 +407,44 @@ export class YtDlpWrapper {
     onProgress: (progress: DownloadProgress) => void
   ): void {
     // yt-dlp progress format variations:
-    // [download]   45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
-    // [download]  45.2% of ~123.45MiB at  1.23MiB/s ETA 00:45
-    // [download]   45.2% of   123.45MiB at   1.23MiB/s ETA 00:45
+    // [download]   0.0% of   17.70MiB at  107.11KiB/s ETA 02:49
+    // [download]  45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
+    // [download] 100.0% of   17.70MiB at    1.09MiB/s ETA 00:00
+    // [download] 100% of   17.70MiB in 00:00:17 at 1.03MiB/s (completion format)
 
-    // Primary pattern with units
-    let progressMatch = output.match(
-      /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s\s+ETA\s+(\d+):(\d+)/
-    );
+    // Process each line separately (output may contain multiple lines)
+    const lines = output.split('\n');
 
-    // Fallback pattern without explicit units (assumes MiB default)
-    if (!progressMatch) {
-      progressMatch = output.match(
-        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s+at\s+(\d+\.?\d*)\/s\s+ETA\s+(\d+):(\d+)/
+    for (const line of lines) {
+      // Pattern 1: Standard progress with ETA
+      // [download]   0.0% of   17.70MiB at  107.11KiB/s ETA 02:49
+      let progressMatch = line.match(
+        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s\s+ETA\s+(\d+):(\d+)/
       );
 
       if (progressMatch) {
-        // Reformat to match expected groups (no unit groups, so shift indices)
         const percent = parseFloat(progressMatch[1]);
         const totalSize = parseFloat(progressMatch[2]);
-        const speed = parseFloat(progressMatch[3]);
-        const etaMinutes = parseInt(progressMatch[4], 10);
-        const etaSeconds = parseInt(progressMatch[5], 10);
+        const totalUnit = progressMatch[3];
+        const speed = parseFloat(progressMatch[4]);
+        const speedUnit = progressMatch[5];
+        const etaMinutes = parseInt(progressMatch[6], 10);
+        const etaSeconds = parseInt(progressMatch[7], 10);
 
-        // Use default MiB units
-        const totalBytes = this.convertToBytes(totalSize, "MiB");
-        const speedBytes = this.convertToBytes(speed, "MiB");
+        // Validate parsed values
+        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
+          continue;
+        }
+
+        // Convert to bytes
+        const totalBytes = this.convertToBytes(totalSize, totalUnit);
+        const speedBytes = this.convertToBytes(speed, speedUnit);
+
+        // Prevent division by zero or invalid calculations
+        if (totalBytes === 0) {
+          continue;
+        }
+
         const downloadedBytes = (totalBytes * percent) / 100;
         const etaTotal = etaMinutes * 60 + etaSeconds;
 
@@ -443,43 +455,83 @@ export class YtDlpWrapper {
           speed: speedBytes,
           eta: etaTotal,
         });
-        return;
-      }
-    }
-
-    if (progressMatch && progressMatch.length >= 7) {
-      const percent = parseFloat(progressMatch[1]);
-      const totalSize = parseFloat(progressMatch[2]);
-      const totalUnit = progressMatch[3] || "MiB";
-      const speed = parseFloat(progressMatch[4]);
-      const speedUnit = progressMatch[5] || "MiB";
-      const etaMinutes = parseInt(progressMatch[6], 10);
-      const etaSeconds = parseInt(progressMatch[7], 10);
-
-      // Validate parsed values
-      if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
-        return;
+        continue;
       }
 
-      // Convert to bytes
-      const totalBytes = this.convertToBytes(totalSize, totalUnit);
-      const speedBytes = this.convertToBytes(speed, speedUnit);
+      // Pattern 2: Completion format
+      // [download] 100% of   17.70MiB in 00:00:17 at 1.03MiB/s
+      const completionMatch = line.match(
+        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+in\s+(\d+):(\d+):(\d+)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s/
+      );
 
-      // Prevent division by zero or invalid calculations
-      if (totalBytes === 0) {
-        return;
+      if (completionMatch) {
+        const percent = parseFloat(completionMatch[1]);
+        const totalSize = parseFloat(completionMatch[2]);
+        const totalUnit = completionMatch[3];
+        const speed = parseFloat(completionMatch[7]);
+        const speedUnit = completionMatch[8];
+
+        // Validate parsed values
+        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
+          continue;
+        }
+
+        // Convert to bytes
+        const totalBytes = this.convertToBytes(totalSize, totalUnit);
+        const speedBytes = this.convertToBytes(speed, speedUnit);
+
+        if (totalBytes === 0) {
+          continue;
+        }
+
+        const downloadedBytes = (totalBytes * percent) / 100;
+
+        onProgress({
+          percent,
+          downloadedBytes,
+          totalBytes,
+          speed: speedBytes,
+          eta: 0, // Completion has no ETA
+        });
+        continue;
       }
 
-      const downloadedBytes = (totalBytes * percent) / 100;
-      const etaTotal = etaMinutes * 60 + etaSeconds;
+      // Pattern 3: Fallback for formats without explicit units (assumes MiB default)
+      const fallbackMatch = line.match(
+        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s+at\s+(\d+\.?\d*)\s+ETA\s+(\d+):(\d+)/
+      );
 
-      onProgress({
-        percent,
-        downloadedBytes,
-        totalBytes,
-        speed: speedBytes,
-        eta: etaTotal,
-      });
+      if (fallbackMatch) {
+        const percent = parseFloat(fallbackMatch[1]);
+        const totalSize = parseFloat(fallbackMatch[2]);
+        const speed = parseFloat(fallbackMatch[3]);
+        const etaMinutes = parseInt(fallbackMatch[4], 10);
+        const etaSeconds = parseInt(fallbackMatch[5], 10);
+
+        // Validate parsed values
+        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
+          continue;
+        }
+
+        // Use default MiB units
+        const totalBytes = this.convertToBytes(totalSize, "MiB");
+        const speedBytes = this.convertToBytes(speed, "MiB");
+
+        if (totalBytes === 0) {
+          continue;
+        }
+
+        const downloadedBytes = (totalBytes * percent) / 100;
+        const etaTotal = etaMinutes * 60 + etaSeconds;
+
+        onProgress({
+          percent,
+          downloadedBytes,
+          totalBytes,
+          speed: speedBytes,
+          eta: etaTotal,
+        });
+      }
     }
   }
 
