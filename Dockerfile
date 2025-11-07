@@ -30,7 +30,7 @@ RUN apk add --no-cache vips-dev ffmpeg python3 py3-pip curl ca-certificates aria
 
 # Install yt-dlp with default dependencies
 RUN python3 -m venv /opt/yt-dlp-venv \
-    && /opt/yt-dlp-venv/bin/pip install -U --pre --no-cache-dir "yt-dlp[default]" \
+    && /opt/yt-dlp-venv/bin/pip install -U --pre --no-cache-dir "yt-dlp[default,curl-cffi]" \
     && ln -s /opt/yt-dlp-venv/bin/yt-dlp /usr/local/bin/yt-dlp \
     && /opt/yt-dlp-venv/bin/pip install -U --no-cache-dir yt-dlp-ejs \
     && ln -s /opt/yt-dlp-venv/bin/yt-dlp-ejs /usr/local/bin/yt-dlp-ejs
