@@ -165,12 +165,12 @@ export class YTDLCommand extends CommandInterface {
         downloadMode === "audio"
           ? await this.ytdl.downloadToBuffer(url, {
               audioOnly: true,
-              useAria2c: true,
+              useAria2c: false,
               concurrentFragments: 5,
               onProgress: handleProgress,
             })
           : await this.ytdl.downloadToBuffer(url, {
-              useAria2c: true,
+              useAria2c: false,
               concurrentFragments: 5,
               onProgress: handleProgress,
             });
