@@ -27,6 +27,10 @@ interface YtDlpOptions {
   skipInfoFetch?: boolean;
     // Pre-fetched video info to use for validation
   videoInfo?: any;
+    // Proxy URL (e.g., http://proxy.example.com:8080, socks5://127.0.0.1:1080)
+  proxy?: string;
+    // Use system proxy
+  useSystemProxy?: boolean;
 }
 
 interface YtDlpResult {
@@ -71,7 +75,7 @@ export class YtDlpWrapper {
     this.useAria2c = useAria2c;
   }
 
-  async getVideoInfo(url: string): Promise<any> {
+  async getVideoInfo(url: string, options: YtDlpOptions = {}): Promise<any> {
     const args = [
       "yt-dlp",
       "--dump-json",
@@ -82,8 +86,14 @@ export class YtDlpWrapper {
       this.cookiesFile,
       "--js-runtimes",
       "node",
-      url,
     ];
+
+    // Add proxy if specified
+    if (options.proxy) {
+      args.push("--proxy", options.proxy);
+    }
+
+    args.push(url);
 
     try {
       const { stdout } = await this.executeCommandWithTimeout(args, 30000); // 30s timeout for info
@@ -273,6 +283,11 @@ export class YtDlpWrapper {
 
     args.push("--js-runtimes", "node");
 
+    // Add proxy if specified
+    if (options.proxy) {
+      args.push("--proxy", options.proxy);
+    }
+
     // Performance: Enable concurrent fragments for HLS/DASH streams
     const concurrentFragments = options.concurrentFragments || 5;
     args.push("--concurrent-fragments", String(concurrentFragments));
@@ -411,6 +426,7 @@ export class YtDlpWrapper {
     // [download]  45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
     // [download] 100.0% of   17.70MiB at    1.09MiB/s ETA 00:00
     // [download] 100% of   17.70MiB in 00:00:17 at 1.03MiB/s (completion format)
+      console.log(output);
 
     // Process each line separately (output may contain multiple lines)
     const lines = output.split('\n');
@@ -419,7 +435,7 @@ export class YtDlpWrapper {
       // Pattern 1: Standard progress with ETA
       // [download]   0.0% of   17.70MiB at  107.11KiB/s ETA 02:49
       let progressMatch = line.match(
-        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s\s+ETA\s+(\d+):(\d+)/
+        /\[download]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s\s+ETA\s+(\d+):(\d+)/
       );
 
       if (progressMatch) {
@@ -461,7 +477,7 @@ export class YtDlpWrapper {
       // Pattern 2: Completion format
       // [download] 100% of   17.70MiB in 00:00:17 at 1.03MiB/s
       const completionMatch = line.match(
-        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+in\s+(\d+):(\d+):(\d+)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s/
+        /\[download]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+in\s+(\d+):(\d+):(\d+)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s/
       );
 
       if (completionMatch) {
@@ -498,7 +514,7 @@ export class YtDlpWrapper {
 
       // Pattern 3: Fallback for formats without explicit units (assumes MiB default)
       const fallbackMatch = line.match(
-        /\[download\]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s+at\s+(\d+\.?\d*)\s+ETA\s+(\d+):(\d+)/
+        /\[download]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s+at\s+(\d+\.?\d*)\s+ETA\s+(\d+):(\d+)/
       );
 
       if (fallbackMatch) {

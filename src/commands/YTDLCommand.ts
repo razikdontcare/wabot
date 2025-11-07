@@ -51,6 +51,19 @@ export class YTDLCommand extends CommandInterface {
     });
   }
 
+    private isTikTokUrl(input: string): boolean {
+        try {
+            const hostname = new URL(input).hostname.toLowerCase();
+            return (
+                hostname === "tiktok.com" ||
+                hostname.endsWith(".tiktok.com") ||
+                hostname.includes("tiktok.com")
+            );
+        } catch {
+            return false;
+        }
+    }
+
   async handleCommand(
     args: string[],
     jid: string,
@@ -86,6 +99,8 @@ export class YTDLCommand extends CommandInterface {
         url = urls[0] || null;
       }
     }
+
+    const isTikTok = url ? this.isTikTokUrl(url) : false;
 
     if (!url) {
       await sock.sendMessage(jid, {
@@ -167,11 +182,13 @@ export class YTDLCommand extends CommandInterface {
               audioOnly: true,
               useAria2c: false,
               concurrentFragments: 5,
+              proxy: isTikTok ? process.env.PROXY : undefined,
               onProgress: handleProgress,
             })
           : await this.ytdl.downloadToBuffer(url, {
               useAria2c: false,
               concurrentFragments: 5,
+              proxy: isTikTok ? process.env.PROXY : undefined,
               onProgress: handleProgress,
             });
 
