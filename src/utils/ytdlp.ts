@@ -97,9 +97,9 @@ export class YtDlpWrapper {
    * Download video or audio to buffer with optimized performance.
    *
    * Performance Optimization:
-   * - Pass pre-fetched videoInfo to avoid redundant yt-dlp execution
-   * - If videoInfo is provided, skips the internal getVideoInfo() call
-   * - This eliminates one yt-dlp process execution, significantly improving performance
+   * - Uses --print-json flag to fetch metadata DURING download (single yt-dlp process!)
+   * - If videoInfo is provided, uses it for pre-validation and skips --print-json
+   * - This eliminates redundant yt-dlp execution, significantly improving performance
    *
    * @param url - Video URL to download
    * @param options - Download options including optional pre-fetched videoInfo
@@ -109,16 +109,10 @@ export class YtDlpWrapper {
     url: string,
     options: YtDlpOptions = {}
   ): Promise<YtDlpResult> {
-    // Use pre-fetched video info if provided, or fetch it
-    let videoInfo = options.videoInfo;
+    // If pre-fetched info is provided, validate it upfront
+    if (options.videoInfo) {
+      const videoInfo = options.videoInfo;
 
-    if (!videoInfo && !options.skipInfoFetch) {
-      // Check video info first (only if not already provided)
-      videoInfo = await this.getVideoInfo(url);
-    }
-
-    // Validate video info if available
-    if (videoInfo) {
       // Check duration limit
       if (videoInfo.duration && videoInfo.duration > this.MAX_DURATION) {
         throw new Error(
@@ -142,9 +136,16 @@ export class YtDlpWrapper {
     // Build command arguments
     const args = this.buildArgs(url, outputTemplate, options);
 
+    // Add --print-json to get metadata during download (single process optimization!)
+    // Only add if videoInfo is not provided
+    if (!options.videoInfo) {
+      // Insert after 'yt-dlp' command
+      args.splice(1, 0, "--print-json");
+    }
+
     try {
       // Execute yt-dlp command with timeout
-      const { stdout} = await this.executeCommandWithTimeout(
+      const { stdout } = await this.executeCommandWithTimeout(
         args,
         this.DOWNLOAD_TIMEOUT,
         options.onProgress
@@ -163,10 +164,68 @@ export class YtDlpWrapper {
       // Clean up temporary file
       await fs.unlink(downloadedFile.path).catch(() => {});
 
+      // Parse metadata from stdout if not provided
+      let metadata = options.videoInfo;
+      if (!metadata && stdout) {
+        try {
+          // --print-json outputs JSON before download starts
+          // Look for the first complete JSON object in stdout
+          const lines = stdout.split('\n');
+          let jsonStr = '';
+          let braceCount = 0;
+          let foundStart = false;
+
+          for (const line of lines) {
+            for (const char of line) {
+              if (char === '{') {
+                braceCount++;
+                foundStart = true;
+              }
+              if (foundStart) {
+                jsonStr += char;
+              }
+              if (char === '}') {
+                braceCount--;
+                if (braceCount === 0 && foundStart) {
+                  // Found complete JSON object
+                  break;
+                }
+              }
+            }
+            if (braceCount === 0 && foundStart) {
+              break;
+            }
+            if (foundStart) {
+              jsonStr += '\n';
+            }
+          }
+
+          if (jsonStr) {
+            metadata = JSON.parse(jsonStr);
+
+            // Validate after download (in case validation is needed)
+            if (metadata.duration && metadata.duration > this.MAX_DURATION) {
+              throw new Error(
+                `Video too long: ${Math.round(metadata.duration / 60)} minutes (max: ${
+                  this.MAX_DURATION / 60
+                } minutes)`
+              );
+            }
+
+            if (metadata.is_live) {
+              throw new Error("Live streams are not supported");
+            }
+          }
+        } catch (parseError) {
+          // Fallback to basic metadata if JSON parsing fails
+          metadata = this.parseMetadata(stdout);
+        }
+      }
+
       return {
         buffer,
         filename: downloadedFile.name,
-        metadata: videoInfo || this.parseMetadata(stdout),
+        metadata: metadata || {},
       };
     } catch (error) {
       // Clean up any partial downloads

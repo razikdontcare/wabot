@@ -95,19 +95,9 @@ export class YTDLCommand extends CommandInterface {
     }
 
     try {
-      // Get video info first
+      // Single yt-dlp process - gets info + downloads file in one go!
       await sock.sendMessage(jid, {
-        text: "🔍 Mengecek informasi video...",
-      });
-
-      const videoInfo = await this.ytdl.getVideoInfo(url);
-      const duration = videoInfo.duration
-        ? Math.round(videoInfo.duration / 60)
-        : 0;
-      const title = videoInfo.title || "Unknown";
-
-      await sock.sendMessage(jid, {
-        text: `📹 *${title}*\n⏱️ Durasi: ${duration} menit\n🔄 Memulai download ${downloadMode}...`,
+        text: "🔄 Memulai download...",
       });
 
       // Track progress for ETA updates
@@ -170,6 +160,7 @@ export class YTDLCommand extends CommandInterface {
       };
 
       // Use optimized download with all speed enhancements and progress tracking
+      // This now uses a SINGLE yt-dlp process that fetches metadata and downloads
       const response =
         downloadMode === "audio"
           ? await this.ytdl.downloadToBuffer(url, {
@@ -177,14 +168,23 @@ export class YTDLCommand extends CommandInterface {
               useAria2c: true,
               concurrentFragments: 5,
               onProgress: handleProgress,
-              videoInfo: videoInfo, // Pass pre-fetched info to avoid redundant fetch
             })
           : await this.ytdl.downloadToBuffer(url, {
               useAria2c: true,
               concurrentFragments: 5,
               onProgress: handleProgress,
-              videoInfo: videoInfo, // Pass pre-fetched info to avoid redundant fetch
             });
+
+      // Extract metadata from response
+      const videoInfo = response.metadata;
+      const duration = videoInfo?.duration
+        ? Math.round(videoInfo.duration / 60)
+        : 0;
+      const title = videoInfo?.title || "Unknown";
+
+      await sock.sendMessage(jid, {
+        text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${duration} menit`,
+      });
 
       if (!response) {
         await sock.sendMessage(jid, {
