@@ -69,10 +69,114 @@ jobs:
         run: |
           if [ "${{ steps.latest_tag.outputs.LATEST_TAG }}" != "v0.0.0" ]; then
             echo "Generating changelog from ${{ steps.latest_tag.outputs.LATEST_TAG }} to HEAD"
-            CHANGELOG=$(git log ${{ steps.latest_tag.outputs.LATEST_TAG }}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+            COMMITS=$(git log ${{ steps.latest_tag.outputs.LATEST_TAG }}..HEAD --pretty=format:"%s|||%h" --no-merges)
           else
             echo "No previous tag found, generating full changelog"
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges | head -n 20)
+            COMMITS=$(git log --pretty=format:"%s|||%h" --no-merges | head -n 20)
+          fi
+          
+          # Initialize category arrays
+          declare -A FEATURES
+          declare -A BUGFIXES
+          declare -A BREAKING
+          declare -A OTHER
+          
+          # Parse commits and categorize them
+          while IFS='|||' read -r message hash; do
+            # Skip empty lines
+            [ -z "$message" ] && continue
+          
+            # Extract type and scope using regex
+            if [[ "$message" =~ ^([a-zA-Z]+)(\(([^)]+)\))?:(.+)$ ]]; then
+              type="${BASH_REMATCH[1]}"
+              scope="${BASH_REMATCH[3]}"
+              desc="${BASH_REMATCH[4]}"
+              desc=$(echo "$desc" | sed 's/^[[:space:]]*//')
+          
+              # Check for breaking changes
+              if echo "$message" | grep -qiE 'BREAKING CHANGE|breaking change'; then
+                if [ -n "$scope" ]; then
+                  BREAKING["$scope"]+="- $desc (\`$hash\`)"$'\n'
+                else
+                  BREAKING["_none"]+="- $desc (\`$hash\`)"$'\n'
+                fi
+              # Categorize by type
+              elif [[ "$type" =~ ^(feat|feature)$ ]]; then
+                if [ -n "$scope" ]; then
+                  FEATURES["$scope"]+="- $desc (\`$hash\`)"$'\n'
+                else
+                  FEATURES["_none"]+="- $desc (\`$hash\`)"$'\n'
+                fi
+              elif [[ "$type" == "fix" ]]; then
+                if [ -n "$scope" ]; then
+                  BUGFIXES["$scope"]+="- $desc (\`$hash\`)"$'\n'
+                else
+                  BUGFIXES["_none"]+="- $desc (\`$hash\`)"$'\n'
+                fi
+              else
+                OTHER["_none"]+="- $message (\`$hash\`)"$'\n'
+              fi
+            else
+              # Doesn't match conventional commit format
+              OTHER["_none"]+="- $message (\`$hash\`)"$'\n'
+            fi
+          done <<< "$COMMITS"
+          
+          # Build formatted changelog
+          CHANGELOG=""
+          
+          # Breaking Changes
+          if [ ${#BREAKING[@]} -gt 0 ]; then
+            CHANGELOG+="### 🚨 Breaking Changes"$'\n\n'
+            for scope in "${!BREAKING[@]}"; do
+              if [ "$scope" != "_none" ]; then
+                CHANGELOG+="**$scope**"$'\n'
+                CHANGELOG+="${BREAKING[$scope]}"$'\n'
+              else
+                CHANGELOG+="${BREAKING[$scope]}"
+              fi
+            done
+            CHANGELOG+=$'\n'
+          fi
+          
+          # Features
+          if [ ${#FEATURES[@]} -gt 0 ]; then
+            CHANGELOG+="### ✨ Features"$'\n\n'
+            for scope in "${!FEATURES[@]}"; do
+              if [ "$scope" != "_none" ]; then
+                CHANGELOG+="**$scope**"$'\n'
+                CHANGELOG+="${FEATURES[$scope]}"$'\n'
+              else
+                CHANGELOG+="${FEATURES[$scope]}"
+              fi
+            done
+            CHANGELOG+=$'\n'
+          fi
+          
+          # Bug Fixes
+          if [ ${#BUGFIXES[@]} -gt 0 ]; then
+            CHANGELOG+="### 🐛 Bug Fixes"$'\n\n'
+            for scope in "${!BUGFIXES[@]}"; do
+              if [ "$scope" != "_none" ]; then
+                CHANGELOG+="**$scope**"$'\n'
+                CHANGELOG+="${BUGFIXES[$scope]}"$'\n'
+              else
+                CHANGELOG+="${BUGFIXES[$scope]}"
+              fi
+            done
+            CHANGELOG+=$'\n'
+          fi
+          
+          # Other Changes
+          if [ ${#OTHER[@]} -gt 0 ]; then
+            CHANGELOG+="### 🔧 Other Changes"$'\n\n'
+            CHANGELOG+="${OTHER[_none]}"
+            CHANGELOG+=$'\n'
+          fi
+          
+          # If no commits found
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="No changes in this release."
           fi
           
           # Save changelog to file to handle multiline content
@@ -94,17 +198,13 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version_bump.outputs.NEW_VERSION }}
-          name: Release ${{ steps.version_bump.outputs.NEW_VERSION }}
+          name: ${{ steps.version_bump.outputs.NEW_VERSION }}
           body: |
-            ## What's Changed
+            ## 📋 Release Notes
             
             ${{ steps.changelog.outputs.CHANGELOG }}
             
-            ## Docker Image
-            
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.version_bump.outputs.NEW_VERSION }}
-            ```
+            ---
             
             **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.latest_tag.outputs.LATEST_TAG }}...${{ steps.version_bump.outputs.NEW_VERSION }}
           draft: false
