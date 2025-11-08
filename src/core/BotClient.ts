@@ -46,7 +46,7 @@ export class BotClient {
     public currentQR: string | null = null; // Store current QR code
     private sock: WebSocketInfo | null = null;
     private commandHandler: CommandHandler;
-    private sessionService: SessionService;
+    private readonly sessionService: SessionService;
     private botId: string | null = null;
     private reconnectAttempts: number = 0;
     private authState: {
