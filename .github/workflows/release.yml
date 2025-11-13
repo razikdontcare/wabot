@@ -86,12 +86,11 @@ jobs:
             # Skip empty lines
             [ -z "$message" ] && continue
           
-            # Extract type and scope using regex
-            if [[ "$message" =~ ^([a-zA-Z]+)(\(([^)]+)\))?:(.+)$ ]]; then
-              type="${BASH_REMATCH[1]}"
-              scope="${BASH_REMATCH[3]}"
-              desc="${BASH_REMATCH[4]}"
-              desc=$(echo "$desc" | sed 's/^[[:space:]]*//')
+            # Extract type and scope using grep/sed for better compatibility
+            if echo "$message" | grep -qE '^[a-zA-Z]+(\([^)]+\))?:.+$'; then
+              type=$(echo "$message" | sed -E 's/^([a-zA-Z]+).*/\1/')
+              scope=$(echo "$message" | sed -nE 's/^[a-zA-Z]+\(([^)]+)\):.*/\1/p')
+              desc=$(echo "$message" | sed -E 's/^[a-zA-Z]+(\([^)]+\))?:[[:space:]]*(.+)$/\2/')
           
               # Check for breaking changes
               if echo "$message" | grep -qiE 'BREAKING CHANGE|breaking change'; then
@@ -101,13 +100,13 @@ jobs:
                   BREAKING["_none"]+="- $desc (\`$hash\`)"$'\n'
                 fi
               # Categorize by type
-              elif [[ "$type" =~ ^(feat|feature)$ ]]; then
+              elif echo "$type" | grep -qE '^(feat|feature)$'; then
                 if [ -n "$scope" ]; then
                   FEATURES["$scope"]+="- $desc (\`$hash\`)"$'\n'
                 else
                   FEATURES["_none"]+="- $desc (\`$hash\`)"$'\n'
                 fi
-              elif [[ "$type" == "fix" ]]; then
+              elif [ "$type" = "fix" ]; then
                 if [ -n "$scope" ]; then
                   BUGFIXES["$scope"]+="- $desc (\`$hash\`)"$'\n'
                 else
