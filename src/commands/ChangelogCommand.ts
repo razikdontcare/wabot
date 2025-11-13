@@ -90,11 +90,12 @@ export class ChangelogCommand extends CommandInterface {
         const publishDate = new Date(release.published_at).toLocaleString("id-ID", {
             dateStyle: "long",
             timeStyle: "short",
+            timeZone: "Asia/Jakarta",
         });
 
         let message = `*📋 Latest Release: ${release.name}*\n\n`;
         message += `🏷️ *Version:* ${release.tag_name}\n`;
-        message += `📅 *Published:* ${publishDate}\n`;
+        message += `📅 *Published:* ${publishDate} WIB\n`;
         message += `👤 *Author:* ${release.author.login}\n`;
         message += `🔗 *URL:* ${release.html_url}\n\n`;
         message += `*📝 Changes:*\n${this.formatReleaseBody(release.body)}`;
@@ -137,4 +138,3 @@ export class ChangelogCommand extends CommandInterface {
         });
     }
 }
-
