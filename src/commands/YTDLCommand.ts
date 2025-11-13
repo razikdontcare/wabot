@@ -87,6 +87,7 @@ export class YTDLCommand extends CommandInterface {
             // Progress callback function
             const handleProgress = async (progress: any) => {
                 // Validate progress data
+                log.info("Download progress:", progress);
                 if (!progress || typeof progress.percent !== 'number' || typeof progress.speed !== 'number') {
                     log.warn("Invalid progress data received:", progress);
                     return;
