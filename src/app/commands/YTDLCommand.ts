@@ -1,6 +1,6 @@
 import {proto} from 'baileys';
 import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
-import {BotConfig, getCurrentConfig, log} from '../../infrastructure/config/config.js';
+import {BotConfig, log} from '../../infrastructure/config/config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
 import {SessionService} from '../../domain/services/SessionService.js';
 import {YtDlpWrapper} from '../../shared/utils/ytdlp.js';
@@ -34,7 +34,7 @@ export class YTDLCommand extends CommandInterface {
         sessionService: SessionService,
         msg: proto.IWebMessageInfo
     ): Promise<void> {
-        const _config = await getCurrentConfig();
+        // const _config = await getCurrentConfig();
         if (args.length > 0 && args[0] === 'help') {
             await sock.sendMessage(jid, {
                 text: `Usage: ${YTDLCommand.commandInfo.helpText}`,

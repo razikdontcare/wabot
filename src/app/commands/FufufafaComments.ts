@@ -70,7 +70,7 @@ export class FufufafaComments extends CommandInterface {
                 const quoted = {
                     key: {
                         remoteJid: jid,
-                        fromMe: quotedMessage.participant === `${botId}@s.whatsapp.net` ? true : false,
+                        fromMe: quotedMessage.participant === `${botId}@s.whatsapp.net`,
                         id: quotedMessage.stanzaId,
                         participant: quotedMessage.participant,
                     },

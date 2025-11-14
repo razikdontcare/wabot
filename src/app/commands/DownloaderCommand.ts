@@ -308,7 +308,7 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
     ): Promise<{ url: string; filename: string } | PickerObject[] | Error> {
         try {
             // Validate URL format
-            if (!url || typeof url !== 'string' || url.trim().length === 0) {
+            if (!url || url.trim().length === 0) {
                 return new Error('Heh, URL-nya mana? Kosong gini gimana mau download 🤨');
             }
 

@@ -74,7 +74,7 @@ async function initializeHangmanGames(sessionService: SessionService): Promise<v
                         word: gameData.word,
                         hint: gameData.hint || 'No hint available',
                         guessedLetters: Array.isArray(gameData.guessedLetters) ? gameData.guessedLetters : [],
-                        attemptsLeft: typeof gameData.attemptsLeft === 'number' ? gameData.attemptsLeft : MAX_ATTEMPTS,
+                        attemptsLeft: gameData.attemptsLeft,
                         maskedWord: gameData.maskedWord || MASK_CHAR.repeat(gameData.word.length),
                         players: Array.isArray(gameData.players) ? gameData.players : [],
                         playerScores: gameData.playerScores || {},

@@ -252,9 +252,7 @@ export class SessionService {
 
     private checkSessionLimit(jid: string): boolean {
         const userSessions = this.sessions.get(jid);
-        if (userSessions && userSessions.size >= BotConfig.maxSessions) {
-            return false;
-        }
-        return true;
+        return !(userSessions && userSessions.size >= BotConfig.maxSessions);
+        
     }
 }

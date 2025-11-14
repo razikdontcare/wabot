@@ -593,7 +593,7 @@ export class CommandHandler {
             await sock.sendMessage(jid, {text: 'Statistik tidak tersedia.'});
             return;
         }
-        let statsText = '';
+        let statsText: string;
         if (args.length > 0) {
             // Show stats for a specific command
             const command = args[0].toLowerCase();

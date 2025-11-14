@@ -232,8 +232,7 @@ export class ConfigCommand extends CommandInterface {
                 break;
             }
             case 'allowfromme': {
-                const allow = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
-                updateData.allowFromMe = allow;
+                updateData.allowFromMe = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
                 break;
             }
             case 'defaultgamehelp':
@@ -243,18 +242,15 @@ export class ConfigCommand extends CommandInterface {
                 updateData.unknownCommandResponse = value;
                 break;
             case 'allowmentionprefix': {
-                const allowMention = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
-                updateData.allowMentionPrefix = allowMention;
+                updateData.allowMentionPrefix = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
                 break;
             }
             case 'disablewarning': {
-                const disableWarning = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
-                updateData.disableWarning = disableWarning;
+                updateData.disableWarning = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
                 break;
             }
             case 'maintenance': {
-                const maintenanceMode = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
-                updateData.maintenanceMode = maintenanceMode;
+                updateData.maintenanceMode = value.toLowerCase() === 'true' || value.toLowerCase() === 'ya';
                 break;
             }
             default:
