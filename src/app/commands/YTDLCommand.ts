@@ -1,0 +1,294 @@
+import {proto} from 'baileys';
+import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
+import {BotConfig, getCurrentConfig, log} from '../../infrastructure/config/config.js';
+import {WebSocketInfo} from '../../shared/types/types.js';
+import {SessionService} from '../../domain/services/SessionService.js';
+import {YtDlpWrapper} from '../../shared/utils/ytdlp.js';
+import extractUrlsFromText from '../../shared/utils/extractUrlsFromText.js';
+
+export class YTDLCommand extends CommandInterface {
+    static commandInfo: CommandInfo = {
+        name: 'ytdl',
+        aliases: ['yt', 'youtube', 'dla'],
+        description: 'Download video or audio from YouTube or other supported platform.',
+        helpText: `*Usage:*
+• ${BotConfig.prefix}dla <url> — Download video or audio from YouTube or other supported platform.
+
+*Example:*
+• ${BotConfig.prefix}dla https://www.youtube.com/watch?v=dQw4w9WgXcQ`,
+        category: 'general',
+        commandClass: YTDLCommand,
+        cooldown: 10000,
+        maxUses: 5,
+    };
+
+    private ytdl = new YtDlpWrapper();
+    private readonly SEND_TIMEOUT = 300000; // 5 minutes timeout
+    private readonly MAX_FILE_SIZE_MB = 100;
+
+    async handleCommand(
+        args: string[],
+        jid: string,
+        user: string,
+        sock: WebSocketInfo,
+        sessionService: SessionService,
+        msg: proto.IWebMessageInfo
+    ): Promise<void> {
+        const _config = await getCurrentConfig();
+        if (args.length > 0 && args[0] === 'help') {
+            await sock.sendMessage(jid, {
+                text: `Usage: ${YTDLCommand.commandInfo.helpText}`,
+            });
+            return;
+        }
+
+        const downloadMode = args.includes('audio') ? 'audio' : 'video';
+        log.info('Download mode set to:', downloadMode);
+
+        // 2. Try to extract URL from args or quoted message
+        let url = extractUrlsFromText(args.join(' '))[0] || null;
+        if (!url && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+            // Try to extract from quoted message text
+            const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+            let quotedText = '';
+            if (quoted?.conversation) quotedText = quoted.conversation;
+            else if (quoted?.extendedTextMessage?.text) quotedText = quoted.extendedTextMessage.text;
+            else if (quoted?.imageMessage?.caption) quotedText = quoted.imageMessage.caption;
+            if (quotedText) {
+                const urls = extractUrlsFromText(quotedText);
+                url = urls[0] || null;
+            }
+        }
+
+        const isTikTok = url ? this.isTikTokUrl(url) : false;
+
+        if (!url) {
+            await sock.sendMessage(jid, {
+                text: 'Silakan masukkan URL yang valid atau balas pesan yang berisi URL.',
+            });
+            return;
+        }
+
+        try {
+            // Single yt-dlp process - gets info + downloads file in one go!
+            await sock.sendMessage(jid, {
+                text: '🔄 Memulai download...',
+            });
+
+            // Track progress for ETA updates
+            let lastProgressUpdate = 0;
+            const progressUpdateInterval = 10000; // Update every 10 seconds
+            let isFirstProgress = true;
+            let isUpdating = false; // Prevent race conditions
+
+            // Progress callback function
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const handleProgress = async (progress: any) => {
+                // Validate progress data
+                log.info('Download progress:', progress);
+                if (!progress || typeof progress.percent !== 'number' || typeof progress.speed !== 'number') {
+                    log.warn('Invalid progress data received:', progress);
+                    return;
+                }
+
+                const now = Date.now();
+                if (now - lastProgressUpdate > progressUpdateInterval && !isUpdating) {
+                    isUpdating = true;
+                    lastProgressUpdate = now;
+
+                    try {
+                        const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+
+                        if (isFirstProgress) {
+                            // First progress update: show full details
+                            // Validate totalBytes and eta exist
+                            if (progress.totalBytes && typeof progress.totalBytes === 'number') {
+                                const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                                const eta = progress.eta || 0;
+                                const etaMinutes = Math.floor(eta / 60);
+                                const etaSeconds = eta % 60;
+                                const etaText = etaMinutes > 0 ? `${etaMinutes}m ${etaSeconds}s` : `${etaSeconds}s`;
+
+                                await sock.sendMessage(jid, {
+                                    text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 Size: ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
+                                });
+                                isFirstProgress = false;
+                            } else {
+                                // Fallback if totalBytes is missing
+                                await sock.sendMessage(jid, {
+                                    text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n⚡ Speed: ${speedMBps} MB/s`,
+                                });
+                                isFirstProgress = false;
+                            }
+                        } else {
+                            // Subsequent updates: simplified progress
+                            await sock.sendMessage(jid, {
+                                text: `📥 Progress: ${progress.percent.toFixed(1)}% | ⚡ ${speedMBps} MB/s`,
+                            });
+                        }
+                    } catch (error) {
+                        log.error('Failed to send progress message:', error);
+                    } finally {
+                        isUpdating = false;
+                    }
+                }
+            };
+
+            // Use optimized download with all speed enhancements and progress tracking
+            // This now uses a SINGLE yt-dlp process that fetches metadata and downloads
+            const response =
+                downloadMode === 'audio'
+                    ? await this.ytdl.downloadToBuffer(url, {
+                        audioOnly: true,
+                        useAria2c: false,
+                        concurrentFragments: 5,
+                        proxy: isTikTok ? process.env.PROXY : undefined,
+                        onProgress: handleProgress,
+                    })
+                    : await this.ytdl.downloadToBuffer(url, {
+                        useAria2c: false,
+                        concurrentFragments: 5,
+                        proxy: isTikTok ? process.env.PROXY : undefined,
+                        onProgress: handleProgress,
+                    });
+
+            // Extract metadata from response
+            const videoInfo = response.metadata;
+            const duration = videoInfo?.duration ? Math.round(videoInfo.duration / 60) : 0;
+            const title = videoInfo?.title || 'Unknown';
+
+            await sock.sendMessage(jid, {
+                text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${duration} menit`,
+            });
+
+            if (!response) {
+                await sock.sendMessage(jid, {
+                    text: 'Gagal mengunduh media. Silakan coba lagi.',
+                });
+                return;
+            }
+
+            // Check file size
+            const fileSizeMB = response.buffer.length / (1024 * 1024);
+            if (fileSizeMB > this.MAX_FILE_SIZE_MB) {
+                await sock.sendMessage(jid, {
+                    text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal ${this.MAX_FILE_SIZE_MB}MB.`,
+                });
+                return;
+            }
+
+            await sock.sendMessage(jid, {
+                text: `📤 Mengirim ${downloadMode} (${fileSizeMB.toFixed(1)}MB)...`,
+            });
+
+            if (downloadMode === 'audio') {
+                try {
+                    await this.sendWithTimeout(sock, jid, {
+                        audio: response.buffer,
+                        mimetype: 'audio/mp4',
+                        fileName: response.filename,
+                    });
+                } catch (error) {
+                    log.error('Failed to send audio:', error);
+                    await sock.sendMessage(jid, {
+                        text: 'Gagal mengirim audio. File mungkin terlalu besar atau koneksi timeout.',
+                    });
+                }
+                return;
+            } else {
+                try {
+                    // Send a status message for large videos
+                    if (response.buffer.length > 50 * 1024 * 1024) {
+                        // 50MB
+                        await sock.sendMessage(jid, {
+                            text: 'Mengirim video besar, mohon tunggu maksimal 5 menit.',
+                        });
+                    }
+
+                    await this.sendWithTimeout(sock, jid, {
+                        video: response.buffer,
+                        mimetype: 'video/mp4',
+                        fileName: response.filename,
+                    });
+                } catch (error) {
+                    log.error('Failed to send video:', error);
+                    if (error instanceof Error && error.message.includes('timeout')) {
+                        await sock.sendMessage(jid, {
+                            text: 'Timeout saat mengirim video. File mungkin terlalu besar.',
+                        });
+                    } else {
+                        await sock.sendMessage(jid, {
+                            text: 'Gagal mengirim video. File mungkin terlalu besar atau terjadi kesalahan.',
+                        });
+                    }
+                }
+                return;
+            }
+        } catch (error) {
+            log.error('Download failed:', error);
+            await this.handleDownloadError(error, sock, jid);
+            return;
+        }
+    }
+
+    private async sendWithTimeout(
+        sock: WebSocketInfo,
+        jid: string,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        message: any,
+        timeoutMs: number = this.SEND_TIMEOUT
+    ): Promise<boolean> {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error(`Send timeout after ${timeoutMs}ms`));
+            }, timeoutMs);
+
+            sock
+                .sendMessage(jid, message)
+                .then(() => {
+                    clearTimeout(timeout);
+                    resolve(true);
+                })
+                .catch((error) => {
+                    clearTimeout(timeout);
+                    reject(error);
+                });
+        });
+    }
+
+    private isTikTokUrl(input: string): boolean {
+        try {
+            const hostname = new URL(input).hostname.toLowerCase();
+            return hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com') || hostname.includes('tiktok.com');
+        } catch {
+            return false;
+        }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private async handleDownloadError(error: any, sock: WebSocketInfo, jid: string): Promise<void> {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        if (errorMessage.includes('timeout')) {
+            await sock.sendMessage(jid, {
+                text: '⏰ Timeout saat mengunduh. Coba lagi atau gunakan URL yang berbeda.',
+            });
+        } else if (errorMessage.includes('too long')) {
+            await sock.sendMessage(jid, {
+                text: `⏱️ ${errorMessage}`,
+            });
+        } else if (errorMessage.includes('Live streams')) {
+            await sock.sendMessage(jid, {
+                text: '📺 Live stream tidak didukung. Gunakan video yang sudah selesai.',
+            });
+        } else if (errorMessage.includes('Private video')) {
+            await sock.sendMessage(jid, {
+                text: '🔒 Video private tidak dapat diunduh.',
+            });
+        } else {
+            await sock.sendMessage(jid, {
+                text: '❌ Gagal mengunduh media. Periksa URL dan coba lagi.',
+            });
+        }
+    }
+}
