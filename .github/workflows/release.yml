@@ -69,10 +69,10 @@ jobs:
         run: |
           if [ "${{ steps.latest_tag.outputs.LATEST_TAG }}" != "v0.0.0" ]; then
             echo "Generating changelog from ${{ steps.latest_tag.outputs.LATEST_TAG }} to HEAD"
-            COMMITS=$(git log ${{ steps.latest_tag.outputs.LATEST_TAG }}..HEAD --pretty=format:"%s<COMMIT_DELIM>%h" --no-merges)
+            COMMITS=$(git log ${{ steps.latest_tag.outputs.LATEST_TAG }}..HEAD --pretty=format:"%s|||%h" --no-merges)
           else
             echo "No previous tag found, generating full changelog"
-            COMMITS=$(git log --pretty=format:"%s<COMMIT_DELIM>%h" --no-merges | head -n 20)
+            COMMITS=$(git log --pretty=format:"%s|||%h" --no-merges | head -n 20)
           fi
           
           # Initialize category arrays
@@ -82,13 +82,20 @@ jobs:
           declare -A OTHER
           
           # Parse commits and categorize them
-          while IFS='<COMMIT_DELIM>' read -r message hash; do
+          while IFS= read -r line; do
             # Skip empty lines
-            [ -z "$message" ] && continue
+            [ -z "$line" ] && continue
+          
+            # Split by delimiter
+            message="${line%|||*}"
+            hash="${line##*|||}"
+          
+            # Skip if we couldn't parse properly
+            [ -z "$message" ] || [ -z "$hash" ] && continue
           
             # Extract type and scope using grep/sed for better compatibility
             if echo "$message" | grep -qE '^[a-zA-Z]+(\([^)]+\))?:.+$'; then
-              type=$(echo "$message" | sed -E 's/^([a-zA-Z]+).*/\1/')
+              type=$(echo "$message" | sed -E 's/^([a-zA-Z]+)(\([^)]+\))?:.*/\1/')
               scope=$(echo "$message" | sed -nE 's/^[a-zA-Z]+\(([^)]+)\):.*/\1/p')
               desc=$(echo "$message" | sed -E 's/^[a-zA-Z]+(\([^)]+\))?:[[:space:]]*(.+)$/\2/')
           
