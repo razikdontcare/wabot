@@ -96,7 +96,6 @@ export class AskAICommand extends CommandInterface {
                 {
                     text: 'Silakan berikan pertanyaan yang ingin diajukan kepada AI.\n\nGunakan `!ai help` untuk melihat semua opsi yang tersedia.',
                 },
-                {quoted: msg}
             );
             return;
         }
@@ -137,7 +136,6 @@ export class AskAICommand extends CommandInterface {
                 {
                     text: response,
                 },
-                {quoted: msg}
             );
         } catch (error) {
             console.error('Error in AI conversation:', error);
@@ -146,7 +144,6 @@ export class AskAICommand extends CommandInterface {
                 {
                     text: 'Terjadi kesalahan saat berkomunikasi dengan AI. Silakan coba lagi.',
                 },
-                {quoted: msg}
             );
         }
     }
@@ -363,7 +360,6 @@ export class AskAICommand extends CommandInterface {
                 {
                     text: 'Anda tidak memiliki sesi percakapan aktif.\n\nMulai percakapan dengan mengirim pertanyaan ke AI menggunakan `!ai <pertanyaan>`.',
                 },
-                {quoted: msg}
             );
             return;
         }
@@ -376,7 +372,7 @@ export class AskAICommand extends CommandInterface {
             `🔄 Sesi akan diperpanjang otomatis setiap kali Anda mengirim pesan\n\n` +
             `_Ketik \`!ai end\` untuk mengakhiri sesi_`;
 
-        await sock.sendMessage(jid, {text: statusText}, {quoted: msg});
+        await sock.sendMessage(jid, {text: statusText});
     }
 
     private async handleEndCommand(
@@ -393,7 +389,6 @@ export class AskAICommand extends CommandInterface {
                 {
                     text: '✅ Sesi percakapan AI Anda telah diakhiri.\n\nTerima kasih telah menggunakan layanan AI! Anda dapat memulai percakapan baru kapan saja.',
                 },
-                {quoted: msg}
             );
         } else {
             await sock.sendMessage(
@@ -401,7 +396,6 @@ export class AskAICommand extends CommandInterface {
                 {
                     text: 'Anda tidak memiliki sesi percakapan aktif yang dapat diakhiri.',
                 },
-                {quoted: msg}
             );
         }
     }

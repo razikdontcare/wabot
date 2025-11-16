@@ -108,11 +108,15 @@ export class CommandHandler {
 
             const config = await getCurrentConfig();
 
-            if (config.maintenanceMode && !config.admins.includes(user)) {
-                await sock.sendMessage(jid, {
-                    text: `${config.emoji.error} Bot sedang dalam mode _maintenance_. Silakan coba lagi nanti.`,
-                });
-                return;
+            // Maintenance mode: allow only admins, considering alternate PN/LID IDs
+            if (config.maintenanceMode) {
+                const isAdmin = await this.isAdminConsideringAlt(user, msg);
+                if (!isAdmin) {
+                    await sock.sendMessage(jid, {
+                        text: `${config.emoji.error} Bot sedang dalam mode _maintenance_. Silakan coba lagi nanti.`,
+                    });
+                    return;
+                }
             }
 
             const {command, args} = await this.extractCommand(text);
@@ -123,6 +127,7 @@ export class CommandHandler {
                 )} for ${user} ${jid.endsWith('@g.us') ? 'in ' + jid : ''}`
             );
 
+            // @ts-expect-error: Baileys typing for readMessages accepts WAMessageKey, but our proto key is compatible at runtime
             await sock.readMessages([msg.key]);
             await sock.sendPresenceUpdate('composing', jid);
 
@@ -156,9 +161,9 @@ export class CommandHandler {
                     });
                     return;
                 }
-                // Permission check for requiredRoles (type-safe, supports multiple roles)
+                // Permission check for requiredRoles considering both LID/PN
                 if (commandInfo.requiredRoles && commandInfo.requiredRoles.length > 0) {
-                    const userRoles = await getUserRoles(user);
+                    const userRoles = await this.getUserRolesConsideringAlt(user, msg);
                     const hasRole = commandInfo.requiredRoles.some((role) => userRoles.includes(role));
                     if (!hasRole) {
                         await sock.sendMessage(jid, {
@@ -299,14 +304,12 @@ export class CommandHandler {
             }
 
             // Safety check for game commands
-            if (info.category === 'game') {
-                const existingSession = await this.sessionService.getSession(jid, user);
-                if (existingSession) {
-                    return {
-                        success: false,
-                        error: `Cannot start ${commandName} - another game (${existingSession.game}) is already running`,
-                    };
-                }
+            const existingSession = await this.sessionService.getSession(jid, user);
+            if (existingSession) {
+                return {
+                    success: false,
+                    error: `Cannot start ${commandName} - another game (${existingSession.game}) is already running`,
+                };
             }
 
             // Increment usage stats
@@ -394,6 +397,33 @@ export class CommandHandler {
 
         const [command, ...args] = commandText.split(/\s+/);
         return {command: command.toLowerCase(), args};
+    }
+
+    // Resolve effective IDs for a user considering LID<->PN alt fields in the message key
+    private getEffectiveUserIds(user: string, msg: proto.IWebMessageInfo): string[] {
+        const ids = new Set<string>();
+        if (user) ids.add(user);
+        // Baileys v7 adds participantAlt/remoteJidAlt on the WAMessageKey shape (not in proto types)
+        const keyAny = (msg as unknown as { key?: { participantAlt?: string; remoteJidAlt?: string } }).key;
+        const alt = keyAny?.participantAlt || keyAny?.remoteJidAlt;
+        if (alt) ids.add(alt);
+        return Array.from(ids);
+    }
+
+    private async isAdminConsideringAlt(user: string, msg: proto.IWebMessageInfo): Promise<boolean> {
+        const config = await getCurrentConfig();
+        const ids = this.getEffectiveUserIds(user, msg);
+        return ids.some((id) => config.admins.includes(id));
+    }
+
+    private async getUserRolesConsideringAlt(user: string, msg: proto.IWebMessageInfo): Promise<string[]> {
+        const ids = this.getEffectiveUserIds(user, msg);
+        const roleSets = await Promise.all(ids.map((id) => getUserRoles(id)));
+        const merged = new Set<string>();
+        for (const roles of roleSets) {
+            for (const r of roles) merged.add(r);
+        }
+        return Array.from(merged);
     }
 
     private async handleGameCommand(

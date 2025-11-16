@@ -1,15 +1,17 @@
 import {Binary} from 'mongodb';
-import baileys, {
+import {
     AuthenticationCreds,
     AuthenticationState,
     BufferJSON,
+    initAuthCreds,
+    proto,
     SignalDataSet,
-    SignalDataTypeMap,
+    SignalDataTypeMap
 } from 'baileys';
 import {BotConfig, log} from './config.js';
 import {getMongoClient} from './mongo.js';
-
-const {proto, initAuthCreds} = baileys;
+//
+// const {proto, initAuthCreds} = baileys;
 
 interface AuthDocument {
     _id: string;
@@ -118,9 +120,6 @@ export const useMongoDBAuthState = async (
                     if (!ids.length) return data;
 
                     try {
-                        const client = await getMongoClient();
-                        // const _collection = client.db(dbName).collection<AuthDocument>(`${collectionPrefix}keys`);
-
                         const docs = await retryOperation(
                             () =>
                                 collections.keys
@@ -137,8 +136,14 @@ export const useMongoDBAuthState = async (
                             let value = deserializeData<SignalDataTypeMap[T]>(doc.data);
 
                             if (value && type === 'app-state-sync-key') {
-                                // Cast to unknown first to satisfy TypeScript
-                                value = proto.Message.AppStateSyncKeyData.fromObject(value) as unknown as SignalDataTypeMap[T];
+                                if (typeof value !== 'object') {
+                                    log.warn('Skipping malformed app-state-sync-key value for id:', doc._id);
+                                    continue;
+                                }
+
+                                value = proto.Message.AppStateSyncKeyData.create(
+                                    value as unknown as proto.Message.IAppStateSyncKeyData
+                                ) as unknown as SignalDataTypeMap[T];
                             }
 
                             if (value) {
@@ -160,9 +165,6 @@ export const useMongoDBAuthState = async (
                     if (!data || Object.keys(data).length === 0) {
                         return; // Skip if no data to set
                     }
-
-                    const client = await getMongoClient();
-                    // const _collection = client.db(dbName).collection<AuthDocument>(`${collectionPrefix}keys`);
 
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const bulkOps: any[] = [];
@@ -217,9 +219,6 @@ export const useMongoDBAuthState = async (
         },
         saveCreds: async () => {
             try {
-                const client = await getMongoClient();
-                const _collection = client.db(dbName).collection<AuthDocument>(`${collectionPrefix}keys`);
-
                 await retryOperation(
                     () =>
                         collections.creds.updateOne({_id: 'creds'}, {$set: {data: serializeData(creds)}}, {upsert: true}),
@@ -234,10 +233,6 @@ export const useMongoDBAuthState = async (
         },
         removeCreds: async () => {
             try {
-                const client = await getMongoClient();
-                const _credsCollection = client.db(dbName).collection<AuthDocument>(`${collectionPrefix}creds`);
-                const _keysCollection = client.db(dbName).collection<AuthDocument>(`${collectionPrefix}keys`);
-
                 await Promise.all([
                     retryOperation(() => collections.creds.deleteMany({}), 3, 800),
                     retryOperation(() => collections.keys.deleteMany({}), 3, 800),

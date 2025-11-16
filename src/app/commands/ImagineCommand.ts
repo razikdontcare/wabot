@@ -51,7 +51,6 @@ export class ImagineCommand extends CommandInterface {
                     {
                         text: 'bestie lu lupa kasih prompt 💀\n\nBilang aja mau bikin gambar apa! Contoh:\n!imagine kucing lucu pake kacamata hitam keren abis\n\nAtau reply pesan aja buat jadiin prompt ✨',
                     },
-                    {quoted: msg}
                 );
                 return;
             }
@@ -60,7 +59,6 @@ export class ImagineCommand extends CommandInterface {
             await sock.sendMessage(
                 jid,
                 {text: 'lagi masak karya seni lu nih... bakal kece banget deh 🔥✨'},
-                {quoted: msg}
             );
 
             const seed = Date.now();
@@ -101,7 +99,6 @@ export class ImagineCommand extends CommandInterface {
                     image: imageBuffer,
                     caption: `visi lu udah jadi kenyataan bestie ✨\nprompt: "${prompt}"\n\nini mah juara banget, sukses total! 💅`,
                 },
-                {quoted: msg}
             );
 
             console.log(`[ImagineCommand] Successfully generated image for user: ${user}`);
@@ -137,7 +134,6 @@ export class ImagineCommand extends CommandInterface {
                 {
                     text: errorMessage,
                 },
-                {quoted: msg}
             );
         }
     }

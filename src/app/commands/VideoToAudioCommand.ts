@@ -1,4 +1,4 @@
-import {downloadMediaMessage, getContentType, proto} from 'baileys';
+import {downloadMediaMessage, getContentType, proto, WAMessage} from 'baileys';
 import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
 import {BotConfig, log} from '../../infrastructure/config/config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
@@ -89,7 +89,7 @@ Reply video dengan: ${BotConfig.prefix}v2a ogg`,
 
             // Download the video as buffer
             const videoBuffer = await downloadMediaMessage(
-                quotedMsg,
+                <WAMessage>quotedMsg,
                 'buffer',
                 {},
                 {
