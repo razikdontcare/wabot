@@ -33,7 +33,7 @@
     "@hono/node-server": "^1.14.1",
     "@tavily/core": "^0.5.10",
     "axios": "^1.8.4",
-    "baileys": "^6.7.18",
+    "baileys": "v7.0.0-rc.6",
     "chalk": "^5.4.1",
     "dotenv": "^16.5.0",
     "groq-sdk": "^0.23.0",
