@@ -154,11 +154,11 @@ export class YTDLCommand extends CommandInterface {
 
             // Extract metadata from response
             const videoInfo = response.metadata;
-            const duration = videoInfo?.duration ? Math.round(videoInfo.duration / 60) : 0;
+            const durationText = this.formatDuration(videoInfo?.duration || 0);
             const title = videoInfo?.title || 'Unknown';
 
             await sock.sendMessage(jid, {
-                text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${duration} menit`,
+                text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
             });
 
             if (!response) {
@@ -254,6 +254,28 @@ export class YTDLCommand extends CommandInterface {
                     reject(error);
                 });
         });
+    }
+
+    private formatDuration(seconds: number): string {
+        if (seconds === 0) return 'Unknown';
+
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+
+        const parts: string[] = [];
+
+        if (hours > 0) {
+            parts.push(`${hours} jam`);
+        }
+        if (minutes > 0) {
+            parts.push(`${minutes} menit`);
+        }
+        if (secs > 0 || parts.length === 0) {
+            parts.push(`${secs} detik`);
+        }
+
+        return parts.join(' ');
     }
 
     private isTikTokUrl(input: string): boolean {
