@@ -241,24 +241,41 @@ export class BotClient {
                     for (const m of messages) {
                         if (!m.message) continue;
 
+                        const baseText = m.message.conversation || m.message.extendedTextMessage?.text || '';
+                        const baseJid = m.key.remoteJid!;
+                        const baseUser = m.key.participant || baseJid;
+
+                        // Passive PDF session ingestion: if user has active pdf session and sends image without command prefix
+                        const session = await this.sessionService.getSession(baseJid, baseUser);
+                        if (session && session.game === 'pdf' && m.message.imageMessage) {
+                            const cfg = await getCurrentConfig().catch(() => BotConfig);
+                            const startsWithPrefix = [cfg.prefix, ...cfg.alternativePrefixes].some((p) => baseText.startsWith(p));
+                            if (!startsWithPrefix) {
+                                try {
+                                    const {PdfCommand} = await import('../commands/PdfCommand.js');
+                                    const pdfCmd = new PdfCommand();
+                                    await pdfCmd.handleAddImage(this.sessionService, m as any, baseUser, baseJid, this.sock!, cfg);
+                                    continue; // Skip normal command handling for this message
+                                } catch (err) {
+                                    log.error('Passive PDF image ingestion failed:', err);
+                                }
+                            }
+                        }
+
                         // Get current config for allowFromMe check
                         const config = await getCurrentConfig().catch(() => BotConfig);
                         if (m.key.fromMe && !config.allowFromMe) continue;
 
-                        const text = m.message.conversation || m.message.extendedTextMessage?.text || '';
-                        const jid = m.key.remoteJid!;
-                        const user = m.key.participant || jid;
-
-                        if (config.allowMentionPrefix && this.botId && text.includes(`@${this.botId}`)) {
-                            const commandText = this.extractCommandFromMention(text, this.botId);
+                        if (config.allowMentionPrefix && this.botId && baseText.includes(`@${this.botId}`)) {
+                            const commandText = this.extractCommandFromMention(baseText, this.botId);
                             if (commandText) {
-                                await this.commandHandler.handleCommand(config.prefix + commandText, jid, user, this.sock!, m);
+                                await this.commandHandler.handleCommand(config.prefix + commandText, baseJid, baseUser, this.sock!, m);
                             }
                             continue;
                         }
 
-                        if (await this.commandHandler.isCommand(text)) {
-                            await this.commandHandler.handleCommand(text, jid, user, this.sock!, m);
+                        if (await this.commandHandler.isCommand(baseText)) {
+                            await this.commandHandler.handleCommand(baseText, baseJid, baseUser, this.sock!, m);
                         }
                     }
                 } catch (error) {

@@ -114,39 +114,9 @@ export class PdfCommand extends CommandInterface {
     }
 
     /**
-     * Start a new PDF session
-     */
-    private async handleStart(
-        sessionService: SessionService,
-        user: string,
-        jid: string,
-        sock: WebSocketInfo,
-        config: any
-    ): Promise<void> {
-        const existingSession = await sessionService.getSession(jid, user);
-        if (existingSession) {
-            await sock.sendMessage(jid, {
-                text: `${config.emoji.error} Kamu masih punya sesi ${existingSession.game} yang aktif!\n\nSelesaikan dulu atau batalkan dengan *${config.prefix}${existingSession.game} cancel*`,
-            });
-            return;
-        }
-
-        const pdfSession: PdfSession = {
-            images: [],
-            totalSize: 0,
-        };
-
-        await sessionService.setSession(jid, user, 'pdf', pdfSession);
-
-        await sock.sendMessage(jid, {
-            text: `${config.emoji.success} Sesi PDF dimulai! 📄✨\n\n*Langkah selanjutnya:*\n1️⃣ Kirim gambar-gambar yang mau digabung (max ${this.MAX_IMAGES})\n2️⃣ Ketik *${config.prefix}pdf done* kalau udah selesai\n\n*Info:*\n• Lihat status: *${config.prefix}pdf status*\n• Batalkan: *${config.prefix}pdf cancel*`,
-        });
-    }
-
-    /**
      * Add image to session
      */
-    private async handleAddImage(
+    async handleAddImage(
         sessionService: SessionService,
         msg: proto.IWebMessageInfo,
         user: string,
@@ -213,6 +183,36 @@ export class PdfCommand extends CommandInterface {
                 text: `${config.emoji.error} Gagal memproses gambar 😢\n\nCoba gambar lain!`,
             });
         }
+    }
+
+    /**
+     * Start a new PDF session
+     */
+    private async handleStart(
+        sessionService: SessionService,
+        user: string,
+        jid: string,
+        sock: WebSocketInfo,
+        config: any
+    ): Promise<void> {
+        const existingSession = await sessionService.getSession(jid, user);
+        if (existingSession) {
+            await sock.sendMessage(jid, {
+                text: `${config.emoji.error} Kamu masih punya sesi ${existingSession.game} yang aktif!\n\nSelesaikan dulu atau batalkan dengan *${config.prefix}${existingSession.game} cancel*`,
+            });
+            return;
+        }
+
+        const pdfSession: PdfSession = {
+            images: [],
+            totalSize: 0,
+        };
+
+        await sessionService.setSession(jid, user, 'pdf', pdfSession);
+
+        await sock.sendMessage(jid, {
+            text: `${config.emoji.success} Sesi PDF dimulai! 📄✨\n\n*Langkah selanjutnya:*\n1️⃣ Kirim gambar-gambar yang mau digabung (max ${this.MAX_IMAGES})\n2️⃣ Ketik *${config.prefix}pdf done* kalau udah selesai\n\n*Info:*\n• Lihat status: *${config.prefix}pdf status*\n• Batalkan: *${config.prefix}pdf cancel*`,
+        });
     }
 
     /**
