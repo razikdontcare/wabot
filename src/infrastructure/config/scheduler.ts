@@ -5,6 +5,8 @@ import {BotConfig, log} from './config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
 import {getAllRegisteredGroupJids} from '../../app/commands/RegisterGroupCommand.js';
 import {VIPService} from '../../domain/services/VIPService.js';
+import {ReminderService} from '../../domain/services/ReminderService.js';
+import {formatIndonesianDate} from '../../shared/utils/indonesianDateParser.js';
 
 // Example: Send a "Good morning!" message to all groups every day at 7am
 export async function scheduleDailyMorningMessage(sock: WebSocketInfo) {
@@ -44,3 +46,45 @@ export async function scheduleVIPCleanup() {
     });
 }
 
+// Reminder checker: Runs every minute to check and send due reminders
+export async function scheduleReminderCheck(sock: WebSocketInfo) {
+    cron.schedule('* * * * *', async () => {
+        try {
+            const mongoClient = await getMongoClient();
+            const reminderService = await ReminderService.getInstance(mongoClient);
+
+            // Get reminders due in the next minute
+            const dueReminders = await reminderService.getUpcoming(1);
+
+            for (const reminder of dueReminders) {
+                try {
+                    // Determine target JID (group or user)
+                    const targetJid = reminder.groupId || reminder.userId;
+
+                    // Format the reminder message
+                    const formattedTime = formatIndonesianDate(reminder.scheduledTime);
+                    const message = `⏰ *Reminder!*\n\n📝 ${reminder.message}\n\n🕐 Dijadwalkan: ${formattedTime}`;
+
+                    // Send reminder
+                    await sock.sendMessage(targetJid, {text: message});
+
+                    // Mark as delivered
+                    await reminderService.markDelivered(reminder._id!);
+
+                    log.info(`Reminder delivered: ${reminder._id} to ${targetJid}`);
+                } catch (error) {
+                    log.error(`Failed to send reminder ${reminder._id}:`, error);
+                    // Continue with other reminders even if one fails
+                }
+            }
+
+            if (dueReminders.length > 0) {
+                log.info(`Processed ${dueReminders.length} reminder(s)`);
+            }
+        } catch (error) {
+            log.error('Error in reminder check task:', error);
+        }
+    });
+
+    log.info('Reminder checker scheduled (runs every minute)');
+}

@@ -46,12 +46,17 @@ export class CooldownManager {
             return false;
         }
 
+        // Check if already at limit BEFORE incrementing
+        if (cooldownInfo.count >= maxUses) {
+            return true; // Already at limit, on cooldown
+        }
+
         // Increment usage count
         cooldownInfo.count++;
         this.cooldowns.set(key, cooldownInfo);
 
-        // On cooldown if usage count exceeds max uses
-        return cooldownInfo.count > maxUses;
+        // Not on cooldown yet
+        return false;
     }
 
     /**

@@ -193,8 +193,8 @@ export class CommandHandler {
 
                 const actualCommand = commandInfo.name;
 
-                // Cooldown check - VIP users bypass cooldown by default
-                const vipBypassCooldown = commandInfo.vipBypassCooldown !== false; // Default to true
+                // Cooldown check - VIP users bypass cooldown only if explicitly enabled
+                const vipBypassCooldown = commandInfo.vipBypassCooldown === true; // Explicit opt-in
                 const shouldCheckCooldown = commandInfo.cooldown && !(isVIP && vipBypassCooldown);
 
                 if (shouldCheckCooldown) {

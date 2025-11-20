@@ -43,7 +43,7 @@ export class VIPService {
     ) {
         this.vipCollection = mongoClient.db(dbName).collection(vipCollectionName);
         this.codeCollection = mongoClient.db(dbName).collection(codeCollectionName);
-        this.createIndexes();
+        // Don't call createIndexes here - will be called in getInstance
     }
 
     static async getInstance(): Promise<VIPService> {
@@ -51,6 +51,7 @@ export class VIPService {
             const {getMongoClient} = await import('../../infrastructure/config/mongo.js');
             const mongoClient = await getMongoClient();
             VIPService.instance = new VIPService(mongoClient);
+            await VIPService.instance.createIndexes();
         }
         return VIPService.instance;
     }
@@ -167,6 +168,8 @@ export class VIPService {
             const vipUser = await this.getVIPUser(userJid);
             if (!vipUser) return false;
 
+            const wasInactive = !vipUser.active;
+
             let newExpiresAt: Date | null;
 
             if (additionalDays === 0) {
@@ -186,6 +189,12 @@ export class VIPService {
                     },
                 }
             );
+
+            // Re-add to VIP role if was inactive
+            if (wasInactive) {
+                const configService = await getBotConfigService();
+                await configService.addUserToRole(userJid, 'vip', extendedBy);
+            }
 
             log.info(`VIP extended for ${userJid} by ${additionalDays === 0 ? 'lifetime' : additionalDays + ' days'} by ${extendedBy}`);
             return true;
@@ -240,23 +249,44 @@ export class VIPService {
      */
     async redeemCode(code: string, userJid: string): Promise<{ success: boolean; message: string }> {
         try {
-            const vipCode = await this.codeCollection.findOne({code, active: true});
+            const now = new Date();
 
-            if (!vipCode) {
-                return {success: false, message: 'Kode VIP tidak valid atau sudah tidak aktif.'};
+            // Use atomic findOneAndUpdate to prevent race conditions
+            const result = await this.codeCollection.findOneAndUpdate(
+                {
+                    code,
+                    active: true,
+                    $and: [
+                        // Check expiration atomically
+                        {
+                            $or: [
+                                {expiresAt: null},
+                                {expiresAt: {$gt: now}}
+                            ]
+                        },
+                        // Check usage limit atomically
+                        {
+                            $or: [
+                                {maxUses: 0},  // unlimited
+                                {$expr: {$lt: ['$currentUses', '$maxUses']}}  // has remaining uses
+                            ]
+                        }
+                    ]
+                },
+                {
+                    $inc: {currentUses: 1}
+                },
+                {
+                    returnDocument: 'after'
+                }
+            );
+
+            if (!result) {
+                // Code is either invalid, expired, inactive, or at max uses
+                return {success: false, message: 'Kode VIP tidak valid, sudah kadaluarsa, atau sudah habis digunakan.'};
             }
 
-            // Check if code has expired
-            if (vipCode.expiresAt && vipCode.expiresAt < new Date()) {
-                await this.codeCollection.updateOne({code}, {$set: {active: false}});
-                return {success: false, message: 'Kode VIP sudah kadaluarsa.'};
-            }
-
-            // Check if code has reached max uses
-            if (vipCode.maxUses > 0 && vipCode.currentUses >= vipCode.maxUses) {
-                await this.codeCollection.updateOne({code}, {$set: {active: false}});
-                return {success: false, message: 'Kode VIP sudah mencapai batas penggunaan maksimal.'};
-            }
+            const vipCode = result;
 
             // Check if user already has active VIP
             const existingVIP = await this.isVIP(userJid);
@@ -268,19 +298,13 @@ export class VIPService {
                 await this.grantVIP(userJid, vipCode.duration, 'code:' + code);
             }
 
-            // Update code usage
-            await this.codeCollection.updateOne(
-                {code},
-                {
-                    $inc: {currentUses: 1},
-                    $set: {
-                        active: vipCode.maxUses === 0 || vipCode.currentUses + 1 < vipCode.maxUses,
-                    },
-                }
-            );
-
             // Update VIP user with redeemed code
             await this.vipCollection.updateOne({userJid}, {$set: {redeemedCode: code}});
+
+            // Deactivate code if it has reached max uses
+            if (vipCode.maxUses > 0 && vipCode.currentUses >= vipCode.maxUses) {
+                await this.codeCollection.updateOne({code}, {$set: {active: false}});
+            }
 
             const durationText = vipCode.duration === 0 ? 'selamanya' : `${vipCode.duration} hari`;
             return {

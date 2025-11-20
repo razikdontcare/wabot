@@ -8,9 +8,10 @@ export class SessionService {
     private db: Db | null = null;
     private sessionCollection: Collection | null = null;
     private initialized: boolean = false;
+    private initPromise: Promise<void> | null = null;
 
     constructor() {
-        this.initialize();
+        this.initPromise = this.initialize();
     }
 
     async getSession<T>(jid: string, user: string): Promise<Session<T> | null> {
@@ -168,6 +169,10 @@ export class SessionService {
                 process.env.NODE_ENV === 'production' ? BotConfig.sessionName : `${BotConfig.sessionName}_dev`
             );
             this.sessionCollection = this.db.collection('sessions');
+
+            // Create indexes for better query performance
+            await this.sessionCollection.createIndex({jid: 1, user: 1});
+
             await this.loadSessionsFromDB();
             this.initialized = true;
             log.info('SessionService initialized with MongoDB on ' + this.db.databaseName);
@@ -179,13 +184,9 @@ export class SessionService {
     }
 
     private async ensureInitialized(): Promise<boolean> {
-        if (!this.initialized) {
-            // Wait for initialization to complete if it's in progress
-            let attempts = 0;
-            while (!this.initialized && attempts < 5) {
-                await new Promise((resolve) => setTimeout(resolve, 500));
-                attempts++;
-            }
+        if (this.initPromise) {
+            await this.initPromise;
+            this.initPromise = null;
         }
         return this.sessionCollection !== null;
     }
@@ -253,6 +254,6 @@ export class SessionService {
     private checkSessionLimit(jid: string): boolean {
         const userSessions = this.sessions.get(jid);
         return !(userSessions && userSessions.size >= BotConfig.maxSessions);
-        
+
     }
 }

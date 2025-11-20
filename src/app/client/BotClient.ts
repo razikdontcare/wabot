@@ -220,9 +220,16 @@ export class BotClient {
                     log.info(`Prefix: ${BotConfig.prefix}`);
 
                     // Initialize VIP cleanup scheduler
-                    const {scheduleVIPCleanup} = await import('../../infrastructure/config/scheduler.js');
+                    const {
+                        scheduleVIPCleanup,
+                        scheduleReminderCheck
+                    } = await import('../../infrastructure/config/scheduler.js');
                     scheduleVIPCleanup();
                     log.info('VIP cleanup scheduler initialized');
+
+                    // Initialize reminder checker
+                    scheduleReminderCheck(this.sock!);
+                    log.info('Reminder checker initialized');
                 }
             });
 
