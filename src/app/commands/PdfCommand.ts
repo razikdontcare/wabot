@@ -42,6 +42,7 @@ export class PdfCommand extends CommandInterface {
         commandClass: PdfCommand,
         cooldown: 15000,
         maxUses: 3,
+        vipOnly: true,
     };
 
     private readonly MAX_IMAGES = 20;
