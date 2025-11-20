@@ -14,6 +14,8 @@ export class RemindCommand extends CommandInterface {
         description: 'Buat pengingat dengan bahasa natural Indonesia.',
         helpText: `*Cara pakai:* ⏰
 • *${BotConfig.prefix}remind <waktu> <pesan>* — Buat pengingat
+• Bisa pakai pemisah antara waktu dan pesan: '|'' atau '-'
+  Contoh: *${BotConfig.prefix}remind 2 jam lagi | tidur*  atau  *${BotConfig.prefix}remind besok pagi - meeting penting*
 • *${BotConfig.prefix}remind list* — Lihat semua pengingat
 • *${BotConfig.prefix}remind delete <nomor>* — Hapus pengingat
 • *${BotConfig.prefix}remind clear* — Hapus semua pengingat
@@ -30,6 +32,8 @@ export class RemindCommand extends CommandInterface {
 • *${BotConfig.prefix}remind besok pagi meeting penting*
 • *${BotConfig.prefix}remind 2 jam lagi cek oven*
 • *${BotConfig.prefix}remind jumat sore jangan lupa bayar tagihan*
+• *${BotConfig.prefix}remind 45 menit lagi | angkat cucian*
+• *${BotConfig.prefix}remind besok malam - kirim laporan mingguan*
 
 *Info:*
 • Timezone: WIB (UTC+7)
@@ -115,22 +119,51 @@ export class RemindCommand extends CommandInterface {
             return;
         }
 
-        // Parse input: find where the time phrase ends and message begins
-
-        // Try to extract time and message
+        // Parse input: split time phrase and message so that message is NOT empty
+        // 1) Prefer explicit divider if provided: '|' or '-' as standalone token
         let parsedDate: Date | null = null;
         let message = '';
-        let timePhrase = '';
 
-        // Try progressively longer time phrases
-        for (let i = 1; i <= Math.min(args.length, 6); i++) {
-            const testTimePhrase = args.slice(0, i).join(' ');
-            const testDate = parseIndonesianDate(testTimePhrase);
+        const dividerIdx = args.findIndex((t) => t === '|' || t === '-');
+        if (dividerIdx !== -1) {
+            const timePhrase = args.slice(0, dividerIdx).join(' ').trim();
+            message = args.slice(dividerIdx + 1).join(' ').trim();
 
-            if (testDate && testDate > new Date()) {
-                parsedDate = testDate;
-                timePhrase = testTimePhrase;
-                message = args.slice(i).join(' ');
+            if (!timePhrase) {
+                await sock.sendMessage(jid, {
+                    text: `${config.emoji.error} Bagian waktu sebelum pemisah kosong nih. Contoh: *${config.prefix}remind 2 jam lagi | tidur*`,
+                });
+                return;
+            }
+            if (!message) {
+                await sock.sendMessage(jid, {
+                    text: `${config.emoji.error} Pesan setelah pemisah kosong. Contoh: *${config.prefix}remind besok pagi - meeting penting*`,
+                });
+                return;
+            }
+
+            const dt = parseIndonesianDate(timePhrase);
+            if (!dt) {
+                await sock.sendMessage(jid, {
+                    text: `${config.emoji.error} Gak ngerti format waktunya: "${timePhrase}" 😕\nCoba contoh: *2 jam lagi*, *besok pagi*, *jumat sore*`,
+                });
+                return;
+            }
+            parsedDate = dt;
+        } else {
+            // 2) Fallback: infer by scanning time phrase from left and ensuring remaining message
+            // Consider up to 6 tokens for time, but leave at least 1 token for message
+            const maxTimeTokens = Math.min(Math.max(args.length - 1, 1), 6);
+            for (let i = maxTimeTokens; i >= 1; i--) {
+                const timeTokens = args.slice(0, i).join(' ');
+                const candidateMessage = args.slice(i).join(' ').trim();
+                const testDate = parseIndonesianDate(timeTokens);
+
+                if (testDate && testDate > new Date() && candidateMessage.length > 0) {
+                    parsedDate = testDate;
+                    message = candidateMessage;
+                    break;
+                }
             }
         }
 
@@ -282,4 +315,3 @@ export class RemindCommand extends CommandInterface {
         });
     }
 }
-
