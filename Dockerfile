@@ -22,6 +22,10 @@ COPY . .
 # Build TypeScript
 RUN bun run tsc
 
+# Copy markdown prompt files to dist
+RUN mkdir -p dist/app/commands/prompts && \
+    cp src/app/commands/prompts/*.md dist/app/commands/prompts/ || true
+
 # Production stage
 FROM node:20-alpine
 
