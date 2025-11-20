@@ -28,7 +28,6 @@ import {getBotConfigService} from './infrastructure/config/config.js';
 import QRCode from 'qrcode';
 
 const app = new Hono();
-const JID_SUFFIX = '@s.whatsapp.net';
 
 // Basic Auth Configuration
 const API_USERNAME = process.env.API_USERNAME || 'admin';
@@ -98,8 +97,7 @@ app.post('/api/send-message', async (c) => {
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const sock = (botClient as any)['sock'];
-        let targetJid = jid.endsWith(JID_SUFFIX) ? jid : jid + JID_SUFFIX;
-        await sock.sendMessage(targetJid, {text});
+        await sock.sendMessage(jid, {text});
         return c.json({success: true});
     } catch (_err) {
         return c.json({error: 'Failed to send message', details: String(_err)}, 500);
