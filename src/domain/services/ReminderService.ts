@@ -1,5 +1,5 @@
 import {Collection, MongoClient, ObjectId} from 'mongodb';
-import {log} from '../../infrastructure/config/config.js';
+import {BotConfig, log} from '../../infrastructure/config/config.js';
 
 export interface Reminder {
     _id?: ObjectId;
@@ -17,8 +17,11 @@ export class ReminderService {
     private collection: Collection<Reminder>;
 
     private constructor(mongoClient: MongoClient) {
-        this.collection = mongoClient.db().collection<Reminder>('reminders');
-        this.ensureIndexes();
+        const dbName = BotConfig.sessionName;
+        this.collection = mongoClient.db(dbName).collection<Reminder>('reminders');
+        // Ensure indexes asynchronously (don't block construction)
+        this.ensureIndexes().catch((err) => log.error('ReminderService index init error:', err));
+        log.info(`[ReminderService] Using database: ${dbName}`);
     }
 
     /**
@@ -38,16 +41,20 @@ export class ReminderService {
      * Create a new reminder
      */
     async create(reminder: Omit<Reminder, '_id' | 'createdAt' | 'delivered'>): Promise<ObjectId> {
-        const newReminder: Reminder = {
-            ...reminder,
-            createdAt: new Date(),
-            delivered: false,
-            timezone: reminder.timezone || 7, // Default to WIB
-        };
-
-        const result = await this.collection.insertOne(newReminder);
-        log.info(`Reminder created for user ${reminder.userId} at ${reminder.scheduledTime}`);
-        return result.insertedId;
+        try {
+            const newReminder: Reminder = {
+                ...reminder,
+                createdAt: new Date(),
+                delivered: false,
+                timezone: reminder.timezone || 7, // Default to WIB
+            };
+            const result = await this.collection.insertOne(newReminder);
+            log.info(`[ReminderService] Inserted reminder ${result.insertedId} for user=${reminder.userId} time=${reminder.scheduledTime.toISOString()}`);
+            return result.insertedId;
+        } catch (err) {
+            log.error('[ReminderService] Failed to insert reminder:', err);
+            throw err;
+        }
     }
 
     /**
@@ -85,6 +92,17 @@ export class ReminderService {
         }
 
         return await this.collection.find(query).sort({scheduledTime: 1}).toArray();
+    }
+
+    // Multi-user helper (handles alt IDs)
+    async getUserRemindersMulti(userIds: string[], includeDelivered = false): Promise<Reminder[]> {
+        const query: any = {userId: {$in: userIds}};
+        if (!includeDelivered) query.delivered = false;
+        return await this.collection.find(query).sort({scheduledTime: 1}).toArray();
+    }
+
+    async countUserRemindersMulti(userIds: string[]): Promise<number> {
+        return await this.collection.countDocuments({userId: {$in: userIds}, delivered: false});
     }
 
     /**
@@ -135,23 +153,28 @@ export class ReminderService {
     }
 
     /**
+     * Debug stats
+     */
+    async getDebugStats(limit = 5): Promise<{ total: number; upcoming: number; sample: Reminder[] }> {
+        const now = new Date();
+        const total = await this.collection.countDocuments();
+        const upcoming = await this.collection.countDocuments({scheduledTime: {$gte: now}, delivered: false});
+        const sample = await this.collection.find().sort({scheduledTime: 1}).limit(limit).toArray();
+        return {total, upcoming, sample};
+    }
+
+    /**
      * Ensure database indexes are created
      */
     private async ensureIndexes(): Promise<void> {
         try {
-            // Index for finding upcoming reminders
             await this.collection.createIndex({scheduledTime: 1, delivered: 1});
-
-            // Index for finding user reminders
             await this.collection.createIndex({userId: 1, delivered: 1});
-
-            // TTL index to auto-delete old reminders after 7 days
+            // TTL index (7 days after scheduledTime). NOTE: If scheduledTime is far future, doc lives until that + 7 days.
             await this.collection.createIndex({scheduledTime: 1}, {expireAfterSeconds: 7 * 24 * 60 * 60});
-
-            log.info('ReminderService indexes created successfully');
+            log.info('[ReminderService] Indexes ensured');
         } catch (error) {
-            log.error('Failed to create ReminderService indexes:', error);
+            log.error('[ReminderService] Failed to create indexes:', error);
         }
     }
 }
-

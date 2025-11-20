@@ -63,10 +63,10 @@ export async function scheduleReminderCheck(sock: WebSocketInfo) {
 
                     // Format the reminder message
                     const formattedTime = formatIndonesianDate(reminder.scheduledTime);
-                    const message = `⏰ *Reminder!*\n\n📝 ${reminder.message}\n\n🕐 Dijadwalkan: ${formattedTime}`;
+                    const message = `⏰ *Reminder!*\n\n📝 ${reminder.message}\n\n🕐 Dijadwalkan: ${formattedTime}\n\n@${reminder.userId.split('@')[0]}`;
 
                     // Send reminder
-                    await sock.sendMessage(targetJid, {text: message});
+                    await sock.sendMessage(targetJid, {text: message, mentions: [reminder.userId]});
 
                     // Mark as delivered
                     await reminderService.markDelivered(reminder._id!);

@@ -182,13 +182,16 @@ export function formatIndonesianDate(date: Date): string {
         'Desember',
     ];
 
-    const dayName = days[date.getDay()];
-    const day = date.getDate();
-    const month = months[date.getMonth()];
-    const year = date.getFullYear();
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
+    // Convert stored UTC time to WIB explicitly (UTC+7) without relying on server local timezone
+    const wibDate = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+
+    // Use UTC getters on the offset date to avoid double timezone application
+    const dayName = days[wibDate.getUTCDay()];
+    const day = wibDate.getUTCDate();
+    const month = months[wibDate.getUTCMonth()];
+    const year = wibDate.getUTCFullYear();
+    const hours = wibDate.getUTCHours().toString().padStart(2, '0');
+    const minutes = wibDate.getUTCMinutes().toString().padStart(2, '0');
 
     return `${dayName}, ${day} ${month} ${year} pukul ${hours}:${minutes} WIB`;
 }
-
