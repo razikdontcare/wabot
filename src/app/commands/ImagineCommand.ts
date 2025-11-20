@@ -14,7 +14,8 @@ export class ImagineCommand extends CommandInterface {
         cooldown: 5,
         disabled: false,
         disabledReason: '',
-        helpText: `*Cara pake:* 💫\n!imagine <prompt kamu>\n\n*Contoh:*\n!imagine sunset aesthetic vibes ungu gitu deh\n\n*Pro tip:* Lu bisa reply pesan buat jadiin prompt juga loh! ✨`,
+        vipBypassCooldown: true, // VIP users bypass cooldown
+        helpText: `*Cara pake:* 💫\n!imagine <prompt kamu>\n\n*Contoh:*\n!imagine sunset aesthetic vibes ungu gitu deh\n\n*Pro tip:* Lu bisa reply pesan buat jadiin prompt juga loh! ✨\n\n👑 *VIP Members:* Generate tanpa cooldown!`,
     };
 
     private BASE_URL = 'https://image.pollinations.ai/prompt';

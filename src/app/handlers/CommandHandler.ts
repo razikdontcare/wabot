@@ -161,6 +161,24 @@ export class CommandHandler {
                     });
                     return;
                 }
+
+                // Check VIP status
+                const {VIPService} = await import('../../domain/services/VIPService.js');
+                const vipService = await VIPService.getInstance();
+                const isVIP = await vipService.isVIP(user);
+
+                // VIP-only command check
+                if (commandInfo.vipOnly && !isVIP) {
+                    const userRoles = await this.getUserRolesConsideringAlt(user, msg);
+                    const isAdmin = userRoles.includes('admin');
+                    if (!isAdmin) {
+                        await sock.sendMessage(jid, {
+                            text: `${config.emoji.error} Perintah ini hanya untuk VIP members! 👑\n\nGunakan !vip info untuk mengetahui cara mendapatkan VIP.`,
+                        });
+                        return;
+                    }
+                }
+
                 // Permission check for requiredRoles considering both LID/PN
                 if (commandInfo.requiredRoles && commandInfo.requiredRoles.length > 0) {
                     const userRoles = await this.getUserRolesConsideringAlt(user, msg);
@@ -175,8 +193,12 @@ export class CommandHandler {
 
                 const actualCommand = commandInfo.name;
 
-                if (commandInfo.cooldown) {
-                    const cooldownTime = commandInfo.cooldown;
+                // Cooldown check - VIP users bypass cooldown by default
+                const vipBypassCooldown = commandInfo.vipBypassCooldown !== false; // Default to true
+                const shouldCheckCooldown = commandInfo.cooldown && !(isVIP && vipBypassCooldown);
+
+                if (shouldCheckCooldown) {
+                    const cooldownTime = commandInfo.cooldown!;
                     const maxUses = commandInfo.maxUses || 1;
 
                     if (this.cooldownManager.isOnCooldown(user, actualCommand, cooldownTime, maxUses)) {

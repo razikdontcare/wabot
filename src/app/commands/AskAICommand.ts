@@ -30,6 +30,8 @@ export class AskAICommand extends CommandInterface {
 • Sesi otomatis berakhir setelah 10 menit tidak aktif
 • AI akan mengingat konteks percakapan selama sesi berlangsung
 
+👑 *VIP Members:* Unlimited uses tanpa cooldown!
+
 *Contoh:*
 • ${BotConfig.prefix}ai Siapa kamu?
 • ${BotConfig.prefix}ai status
@@ -38,6 +40,7 @@ export class AskAICommand extends CommandInterface {
         commandClass: AskAICommand,
         cooldown: 5000,
         maxUses: 10,
+        vipBypassCooldown: true, // VIP users bypass cooldown
     };
 
     private ai = new Groq({apiKey: BotConfig.groqApiKey});

@@ -12,6 +12,8 @@ export interface CommandInfo {
     cooldown?: number;
     maxUses?: number;
     requiredRoles?: import('../../infrastructure/config/config.js').UserRole[];
+    vipOnly?: boolean; // Whether command is VIP-only
+    vipBypassCooldown?: boolean; // Whether VIP users bypass cooldown (default: true)
     disabled?: boolean;
     disabledReason?: string;
 }

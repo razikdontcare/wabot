@@ -148,7 +148,7 @@ export class BotClient {
             }
 
             // Handle connection updates
-            this.sock.ev.on('connection.update', (update) => {
+            this.sock.ev.on('connection.update', async (update) => {
                 const {connection, lastDisconnect, qr} = update;
 
                 // Display QR code refresh info if a new QR is generated
@@ -218,6 +218,11 @@ export class BotClient {
                     log.info(`Connected to WhatsApp as ${this.botId} with session name ${BotConfig.sessionName}`);
                     log.info(`Bot Name: ${BotConfig.name}`);
                     log.info(`Prefix: ${BotConfig.prefix}`);
+
+                    // Initialize VIP cleanup scheduler
+                    const {scheduleVIPCleanup} = await import('../../infrastructure/config/scheduler.js');
+                    scheduleVIPCleanup();
+                    log.info('VIP cleanup scheduler initialized');
                 }
             });
 

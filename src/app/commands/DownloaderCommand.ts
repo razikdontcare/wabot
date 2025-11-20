@@ -59,12 +59,15 @@ export class DownloaderCommand extends CommandInterface {
 • ${BotConfig.prefix}downloader <url> — Download video atau gambar
 • reply pesan lain yang berisi URL dengan ${BotConfig.prefix}downloader
 
+👑 *VIP Members:* No cooldown & unlimited downloads!
+
 *Contoh:*
 ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
         category: 'general',
         commandClass: DownloaderCommand,
         cooldown: 10000,
         maxUses: 3,
+        vipBypassCooldown: true, // VIP users bypass cooldown
     };
 
     private BASE_URL = 'https://cobalt.razik.net';
