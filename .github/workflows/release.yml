@@ -33,11 +33,15 @@ jobs:
           echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_OUTPUT
           echo "Latest tag: ${LATEST_TAG}"
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Determine version bump
         id: version_bump
         run: |
           LATEST_TAG="${{ steps.latest_tag.outputs.LATEST_TAG }}"
-          # Remove 'v' prefix
           VERSION=${LATEST_TAG#v}
           
           # Split version into parts
@@ -46,14 +50,24 @@ jobs:
           MINOR=${VERSION_PARTS[1]:-0}
           PATCH=${VERSION_PARTS[2]:-0}
           
-          # Check commit message for version bump hints
-          COMMIT_MSG=$(git log -1 --pretty=%B)
+          # Install conventional-recommended-bump
+          npm install -g conventional-recommended-bump conventional-commits-parser
           
-          if echo "$COMMIT_MSG" | grep -qiE '\[major\]|breaking change|BREAKING CHANGE'; then
+          # Get recommended bump level
+          if [ "$LATEST_TAG" != "v0.0.0" ]; then
+            BUMP=$(conventional-recommended-bump -p angular --tag-prefix "v" || echo "patch")
+          else
+            BUMP="minor"
+          fi
+          
+          echo "Recommended bump: $BUMP"
+          
+          # Apply version bump
+          if [ "$BUMP" = "major" ]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
             PATCH=0
-          elif echo "$COMMIT_MSG" | grep -qiE '\[minor\]|feat:|feature:'; then
+          elif [ "$BUMP" = "minor" ]; then
             MINOR=$((MINOR + 1))
             PATCH=0
           else
@@ -67,131 +81,48 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
+          # Install conventional-changelog-cli
+          npm install -g conventional-changelog-cli
+          
           if [ "${{ steps.latest_tag.outputs.LATEST_TAG }}" != "v0.0.0" ]; then
             echo "Generating changelog from ${{ steps.latest_tag.outputs.LATEST_TAG }} to HEAD"
-            COMMITS=$(git log ${{ steps.latest_tag.outputs.LATEST_TAG }}..HEAD --pretty=format:"%s|||%h" --no-merges)
+            # Generate changelog using conventional-changelog
+            CHANGELOG=$(npx conventional-changelog -p angular -u | tail -n +3)
           else
             echo "No previous tag found, generating full changelog"
-            COMMITS=$(git log --pretty=format:"%s|||%h" --no-merges | head -n 20)
+            # Generate changelog for first release
+            CHANGELOG=$(npx conventional-changelog -p angular -r 0 | tail -n +3)
           fi
           
-          # Initialize category arrays
-          declare -A FEATURES
-          declare -A BUGFIXES
-          declare -A BREAKING
-          declare -A OTHER
+          # Add emojis to match existing style
+          CHANGELOG=$(echo "$CHANGELOG" | sed \
+            -e 's/### Features/### ✨ Features/g' \
+            -e 's/### Bug Fixes/### 🐛 Bug Fixes/g' \
+            -e 's/### BREAKING CHANGES/### 🚨 Breaking Changes/g' \
+            -e 's/### Performance Improvements/### ⚡ Performance Improvements/g' \
+            -e 's/### Reverts/### ⏪ Reverts/g' \
+            -e 's/### Documentation/### 📝 Documentation/g' \
+            -e 's/### Styles/### 💄 Styles/g' \
+            -e 's/### Code Refactoring/### ♻️ Code Refactoring/g' \
+            -e 's/### Tests/### ✅ Tests/g' \
+            -e 's/### Chores/### 🔧 Chores/g' \
+            -e 's/### Build System/### 📦 Build System/g' \
+            -e 's/### Continuous Integration/### 👷 Continuous Integration/g')
           
-          # Parse commits and categorize them
-          while IFS= read -r line; do
-            # Skip empty lines
-            [ -z "$line" ] && continue
-          
-            # Split by delimiter
-            message="${line%|||*}"
-            hash="${line##*|||}"
-          
-            # Skip if we couldn't parse properly
-            [ -z "$message" ] || [ -z "$hash" ] && continue
-          
-            # Extract type and scope using grep/sed for better compatibility
-            if echo "$message" | grep -qE '^[a-zA-Z]+(\([^)]+\))?:.+$'; then
-              type=$(echo "$message" | sed -E 's/^([a-zA-Z]+)(\([^)]+\))?:.*/\1/')
-              scope=$(echo "$message" | sed -nE 's/^[a-zA-Z]+\(([^)]+)\):.*/\1/p')
-              desc=$(echo "$message" | sed -E 's/^[a-zA-Z]+(\([^)]+\))?:[[:space:]]*(.+)$/\2/')
-          
-              # Check for breaking changes
-              if echo "$message" | grep -qiE 'BREAKING CHANGE|breaking change'; then
-                if [ -n "$scope" ]; then
-                  BREAKING["$scope"]+="- $desc (\`$hash\`)"$'\n'
-                else
-                  BREAKING["_none"]+="- $desc (\`$hash\`)"$'\n'
-                fi
-              # Categorize by type
-              elif echo "$type" | grep -qE '^(feat|feature)$'; then
-                if [ -n "$scope" ]; then
-                  FEATURES["$scope"]+="- $desc (\`$hash\`)"$'\n'
-                else
-                  FEATURES["_none"]+="- $desc (\`$hash\`)"$'\n'
-                fi
-              elif [ "$type" = "fix" ]; then
-                if [ -n "$scope" ]; then
-                  BUGFIXES["$scope"]+="- $desc (\`$hash\`)"$'\n'
-                else
-                  BUGFIXES["_none"]+="- $desc (\`$hash\`)"$'\n'
-                fi
-              else
-                OTHER["_none"]+="- $message (\`$hash\`)"$'\n'
-              fi
-            else
-              # Doesn't match conventional commit format
-              OTHER["_none"]+="- $message (\`$hash\`)"$'\n'
-            fi
-          done <<< "$COMMITS"
-          
-          # Build formatted changelog
-          CHANGELOG=""
-          
-          # Breaking Changes
-          if [ ${#BREAKING[@]} -gt 0 ]; then
-            CHANGELOG+="### 🚨 Breaking Changes"$'\n\n'
-            for scope in "${!BREAKING[@]}"; do
-              if [ "$scope" != "_none" ]; then
-                CHANGELOG+="**$scope**"$'\n'
-                CHANGELOG+="${BREAKING[$scope]}"$'\n'
-              else
-                CHANGELOG+="${BREAKING[$scope]}"
-              fi
-            done
-            CHANGELOG+=$'\n'
-          fi
-          
-          # Features
-          if [ ${#FEATURES[@]} -gt 0 ]; then
-            CHANGELOG+="### ✨ Features"$'\n\n'
-            for scope in "${!FEATURES[@]}"; do
-              if [ "$scope" != "_none" ]; then
-                CHANGELOG+="**$scope**"$'\n'
-                CHANGELOG+="${FEATURES[$scope]}"$'\n'
-              else
-                CHANGELOG+="${FEATURES[$scope]}"
-              fi
-            done
-            CHANGELOG+=$'\n'
-          fi
-          
-          # Bug Fixes
-          if [ ${#BUGFIXES[@]} -gt 0 ]; then
-            CHANGELOG+="### 🐛 Bug Fixes"$'\n\n'
-            for scope in "${!BUGFIXES[@]}"; do
-              if [ "$scope" != "_none" ]; then
-                CHANGELOG+="**$scope**"$'\n'
-                CHANGELOG+="${BUGFIXES[$scope]}"$'\n'
-              else
-                CHANGELOG+="${BUGFIXES[$scope]}"
-              fi
-            done
-            CHANGELOG+=$'\n'
-          fi
-          
-          # Other Changes
-          if [ ${#OTHER[@]} -gt 0 ]; then
-            CHANGELOG+="### 🔧 Other Changes"$'\n\n'
-            CHANGELOG+="${OTHER[_none]}"
-            CHANGELOG+=$'\n'
-          fi
-          
-          # If no commits found
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG="No changes in this release."
+          # If no changelog generated
+          if [ -z "$CHANGELOG" ] || [ "$CHANGELOG" = "" ]; then
+            CHANGELOG="No conventional commits found in this release."
           fi
           
           # Save changelog to file to handle multiline content
-          echo "${CHANGELOG}" > changelog.txt
+          echo "$CHANGELOG" > changelog.txt
           
           # Set output for use in release notes
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          cat changelog.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "CHANGELOG<<EOF"
+            cat changelog.txt
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create and push tag
         run: |
