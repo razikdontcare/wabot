@@ -20,6 +20,8 @@ export class YTDLCommand extends CommandInterface {
         commandClass: YTDLCommand,
         cooldown: 10000,
         maxUses: 5,
+        vipBypassCooldown: true,
+        vipOnly: true,
     };
 
     private ytdl = new YtDlpWrapper();
