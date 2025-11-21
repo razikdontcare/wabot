@@ -9,7 +9,10 @@ import {promises as fs} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
 import {randomUUID} from 'crypto';
-import * as WebP from 'node-webpmux';
+import {createRequire} from 'module';
+
+const require = createRequire(import.meta.url);
+const WebP = require('node-webpmux');
 
 export class StickerCommand extends CommandInterface {
     static commandInfo: CommandInfo = {

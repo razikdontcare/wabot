@@ -241,7 +241,12 @@ export class BotClient {
                     for (const m of messages) {
                         if (!m.message) continue;
 
-                        const baseText = m.message.conversation || m.message.extendedTextMessage?.text || '';
+                        const baseText = m.message.conversation
+                            || m.message.extendedTextMessage?.text
+                            || m.message.imageMessage?.caption
+                            || m.message.videoMessage?.caption
+                            || m.message.documentMessage?.caption
+                            || '';
                         const baseJid = m.key.remoteJid!;
                         const baseUser = m.key.participant || baseJid;
 
