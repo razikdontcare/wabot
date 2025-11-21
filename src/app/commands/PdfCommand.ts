@@ -19,6 +19,7 @@ export class PdfCommand extends CommandInterface {
         helpText: `*Cara pakai:* 📄
 • *${BotConfig.prefix}pdf start* — Mulai sesi PDF
 • Kirim gambar-gambar yang mau digabung
+• Reply gambar yang sudah dikirim dengan *${BotConfig.prefix}pdf add* — Tambah gambar dari pesan lama
 • *${BotConfig.prefix}pdf done [nama]* — Selesai & buat PDF
 
 *Atau:*
@@ -33,7 +34,7 @@ export class PdfCommand extends CommandInterface {
 • *${BotConfig.prefix}pdf start*
 • (kirim gambar 1)
 • (kirim gambar 2)
-• (kirim gambar 3)
+• Reply gambar lama: *${BotConfig.prefix}pdf add*
 • *${BotConfig.prefix}pdf done Laporan_Desember*
 
 *Keluar dari sesi:*
@@ -83,6 +84,12 @@ export class PdfCommand extends CommandInterface {
             // Status
             if (subcommand === 'status') {
                 await this.handleStatus(sessionService, user, jid, sock, config);
+                return;
+            }
+
+            // Add image from quoted message to existing session
+            if (subcommand === 'add' || subcommand === 'tambah') {
+                await this.handleAddFromQuote(sessionService, msg, user, jid, sock, config);
                 return;
             }
 
@@ -186,6 +193,104 @@ export class PdfCommand extends CommandInterface {
     }
 
     /**
+     * Add image from quoted message to existing session
+     */
+    private async handleAddFromQuote(
+        sessionService: SessionService,
+        msg: proto.IWebMessageInfo,
+        user: string,
+        jid: string,
+        sock: WebSocketInfo,
+        config: any
+    ): Promise<void> {
+        // Check if user has an active PDF session
+        const session = await sessionService.getSession(jid, user);
+        if (!session || session.game !== 'pdf') {
+            await sock.sendMessage(jid, {
+                text: `${config.emoji.error} Kamu gak punya sesi PDF yang aktif!\n\nMulai dulu dengan *${config.prefix}pdf start*`,
+            });
+            return;
+        }
+
+        // Check if message has a quoted image
+        const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        if (!quoted?.imageMessage) {
+            await sock.sendMessage(jid, {
+                text: `${config.emoji.error} Reply gambar yang mau ditambahkan dong!\n\nReply gambar terus ketik *${config.prefix}pdf add*`,
+            });
+            return;
+        }
+
+        const pdfSession = session.data as PdfSession;
+
+        // Check max images
+        if (pdfSession.images.length >= this.MAX_IMAGES) {
+            await sock.sendMessage(jid, {
+                text: `${config.emoji.error} Udah maksimal ${this.MAX_IMAGES} gambar nih!\n\nSelesaikan PDF-nya dengan *${config.prefix}pdf done*`,
+            });
+            return;
+        }
+
+        try {
+            // Construct the quoted message for downloading
+            const quotedMsg: proto.IWebMessageInfo = {
+                key: {
+                    remoteJid: jid,
+                    fromMe: !msg.message?.extendedTextMessage?.contextInfo?.participant,
+                    id: msg.message?.extendedTextMessage?.contextInfo?.stanzaId || '',
+                    participant: msg.message?.extendedTextMessage?.contextInfo?.participant,
+                },
+                message: quoted,
+            };
+
+            // Download image
+            const stream = await downloadMediaMessage(
+                <WAMessage>quotedMsg,
+                'buffer',
+                {},
+                {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    logger: log as any,
+                    reuploadRequest: sock.updateMediaMessage,
+                }
+            );
+            const imageBuffer = stream ? Buffer.from(stream) : null;
+
+            if (!imageBuffer) {
+                await sock.sendMessage(jid, {
+                    text: `${config.emoji.error} Gagal download gambar 😢\n\nCoba reply gambar lain!`,
+                });
+                return;
+            }
+
+            // Check total size
+            if (pdfSession.totalSize + imageBuffer.length > this.MAX_TOTAL_SIZE) {
+                await sock.sendMessage(jid, {
+                    text: `${config.emoji.error} Total ukuran gambar udah melebihi 50MB!\n\nSelesaikan PDF-nya sekarang dengan *${config.prefix}pdf done*`,
+                });
+                return;
+            }
+
+            // Resize image if needed
+            const processedImage = await this.resizeImage(imageBuffer);
+
+            pdfSession.images.push(processedImage);
+            pdfSession.totalSize += processedImage.length;
+
+            await sessionService.setSession(jid, user, 'pdf', pdfSession);
+
+            await sock.sendMessage(jid, {
+                text: `${config.emoji.success} Gambar ke-${pdfSession.images.length} ditambahkan! 📸\n\n*Progress:* ${pdfSession.images.length}/${this.MAX_IMAGES} gambar\n*Size:* ${(pdfSession.totalSize / 1024 / 1024).toFixed(2)}MB / 50MB\n\nKirim/tambah gambar lagi atau ketik *${config.prefix}pdf done* untuk selesai!`,
+            });
+        } catch (error) {
+            log.error('Error adding quoted image to PDF session:', error);
+            await sock.sendMessage(jid, {
+                text: `${config.emoji.error} Gagal memproses gambar 😢\n\nCoba gambar lain!`,
+            });
+        }
+    }
+
+    /**
      * Start a new PDF session
      */
     private async handleStart(
@@ -211,7 +316,7 @@ export class PdfCommand extends CommandInterface {
         await sessionService.setSession(jid, user, 'pdf', pdfSession);
 
         await sock.sendMessage(jid, {
-            text: `${config.emoji.success} Sesi PDF dimulai! 📄✨\n\n*Langkah selanjutnya:*\n1️⃣ Kirim gambar-gambar yang mau digabung (max ${this.MAX_IMAGES})\n2️⃣ Ketik *${config.prefix}pdf done* kalau udah selesai\n\n*Info:*\n• Lihat status: *${config.prefix}pdf status*\n• Batalkan: *${config.prefix}pdf cancel*`,
+            text: `${config.emoji.success} Sesi PDF dimulai! 📄✨\n\n*Langkah selanjutnya:*\n1️⃣ Kirim gambar-gambar yang mau digabung (max ${this.MAX_IMAGES})\n2️⃣ Atau reply gambar yang sudah ada dengan *${config.prefix}pdf add*\n3️⃣ Ketik *${config.prefix}pdf done* kalau udah selesai\n\n*Info:*\n• Lihat status: *${config.prefix}pdf status*\n• Batalkan: *${config.prefix}pdf cancel*`,
         });
     }
 
