@@ -245,6 +245,7 @@ export class StickerCommand extends CommandInterface {
      * Create animated sticker from video
      */
     private async createAnimatedSticker(videoBuffer: Buffer, useCrop: boolean): Promise<Buffer> {
+        const config = await getCurrentConfig();
         const tempDir = tmpdir();
         const sessionId = randomUUID();
         const inputPath = join(tempDir, `video_${sessionId}.mp4`);
@@ -266,6 +267,7 @@ export class StickerCommand extends CommandInterface {
             }
 
             // Convert video to animated WebP (max 10 seconds)
+            // Using -vcodec libwebp_anim for better animated sticker support
             await this.executeFFmpeg([
                 '-i',
                 inputPath,
@@ -277,21 +279,26 @@ export class StickerCommand extends CommandInterface {
                 'libwebp',
                 '-lossless',
                 '0',
-                '-quality',
+                '-compression_level',
+                '4',
+                '-q:v',
                 '90',
-                '-preset',
-                'default',
                 '-loop',
                 '0', // Loop forever
+                '-preset',
+                'picture',
                 '-an', // Remove audio
-                '-vsync',
-                '0',
+                '-f',
+                'webp',
                 '-y',
                 outputPath,
             ]);
 
             // Read animated sticker
-            return await fs.readFile(outputPath);
+            const webpBuffer = await fs.readFile(outputPath);
+
+            // Add sticker metadata to animated sticker
+            return await this.addStickerMetadata(webpBuffer, config.name, 'WhatsApp Sticker');
         } finally {
             // Cleanup
             await Promise.allSettled([
