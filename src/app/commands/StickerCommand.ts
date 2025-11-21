@@ -25,7 +25,7 @@ export class StickerCommand extends CommandInterface {
 
 *Batasan:*
 • Ukuran file: maksimal 16MB
-• Video: maksimal 10 detik (frame pertama akan dipakai)
+• Video: maksimal 10 detik (akan jadi animated sticker 🎬)
 
 *Contoh:*
 • Kirim gambar dengan caption: *${BotConfig.prefix}s*
@@ -169,9 +169,8 @@ export class StickerCommand extends CommandInterface {
             let stickerBuffer: Buffer;
 
             if (mediaType === 'video') {
-                // Extract first frame from video
-                const frameBuffer = await this.extractVideoFrame(mediaBuffer);
-                stickerBuffer = await this.createSticker(frameBuffer, useCrop);
+                // Create animated sticker from video
+                stickerBuffer = await this.createAnimatedSticker(mediaBuffer, useCrop);
             } else {
                 stickerBuffer = await this.createSticker(mediaBuffer, useCrop);
             }
@@ -244,31 +243,55 @@ export class StickerCommand extends CommandInterface {
     }
 
     /**
-     * Extract first frame from video
+     * Create animated sticker from video
      */
-    private async extractVideoFrame(videoBuffer: Buffer): Promise<Buffer> {
+    private async createAnimatedSticker(videoBuffer: Buffer, useCrop: boolean): Promise<Buffer> {
         const tempDir = tmpdir();
         const sessionId = randomUUID();
         const inputPath = join(tempDir, `video_${sessionId}.mp4`);
-        const outputPath = join(tempDir, `frame_${sessionId}.png`);
+        const outputPath = join(tempDir, `sticker_${sessionId}.webp`);
 
         try {
             // Write video to temp file
             await fs.writeFile(inputPath, videoBuffer);
 
-            // Extract first frame using ffmpeg
+            // Build ffmpeg filter for sticker conversion
+            let vf = 'fps=15'; // Set to 15 fps for smaller file size
+
+            if (useCrop) {
+                // Crop to center square and resize
+                vf += ',scale=512:512:force_original_aspect_ratio=increase,crop=512:512';
+            } else {
+                // Fit within 512x512 with padding
+                vf += ',scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0.0';
+            }
+
+            // Convert video to animated WebP (max 10 seconds)
             await this.executeFFmpeg([
                 '-i',
                 inputPath,
-                '-vframes',
-                '1',
+                '-t',
+                '10', // Limit to 10 seconds
                 '-vf',
-                'scale=512:512:force_original_aspect_ratio=decrease',
+                vf,
+                '-c:v',
+                'libwebp',
+                '-lossless',
+                '0',
+                '-quality',
+                '90',
+                '-preset',
+                'default',
+                '-loop',
+                '0', // Loop forever
+                '-an', // Remove audio
+                '-vsync',
+                '0',
                 '-y',
                 outputPath,
             ]);
 
-            // Read frame
+            // Read animated sticker
             return await fs.readFile(outputPath);
         } finally {
             // Cleanup
