@@ -281,6 +281,7 @@ export class YtDlpWrapper {
         }
 
         args.push('--no-playlist');
+        
 
         // Add no-mtime flag
         if (options.noMtime !== false) {
