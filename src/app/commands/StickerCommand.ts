@@ -9,10 +9,6 @@ import {promises as fs} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
 import {randomUUID} from 'crypto';
-import {createRequire} from 'module';
-
-const require = createRequire(import.meta.url);
-const WebP = require('node-webpmux');
 
 export class StickerCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
@@ -192,8 +188,6 @@ export class StickerCommand extends CommandInterface {
      * Create sticker from image buffer
      */
     private async createSticker(imageBuffer: Buffer, useCrop: boolean): Promise<Buffer> {
-        const config = await getCurrentConfig();
-
         try {
             const image = sharp(imageBuffer);
             const metadata = await image.metadata();
@@ -225,16 +219,13 @@ export class StickerCommand extends CommandInterface {
                 });
             }
 
-            // Convert to WebP with sticker metadata
-            const webpBuffer = await processed
+            // Convert to WebP
+            return await processed
                 .webp({
                     quality: 100,
                     lossless: false,
                 })
                 .toBuffer();
-
-            // Add sticker metadata (author and pack name)
-            return await this.addStickerMetadata(webpBuffer, config.name, 'WhatsApp Sticker');
         } catch (error) {
             log.error('Error creating sticker:', error);
             throw new Error('Failed to create sticker');
@@ -245,7 +236,6 @@ export class StickerCommand extends CommandInterface {
      * Create animated sticker from video
      */
     private async createAnimatedSticker(videoBuffer: Buffer, useCrop: boolean): Promise<Buffer> {
-        const config = await getCurrentConfig();
         const tempDir = tmpdir();
         const sessionId = randomUUID();
         const inputPath = join(tempDir, `video_${sessionId}.mp4`);
@@ -294,11 +284,8 @@ export class StickerCommand extends CommandInterface {
                 outputPath,
             ]);
 
-            // Read animated sticker
-            const webpBuffer = await fs.readFile(outputPath);
-
-            // Add sticker metadata to animated sticker
-            return await this.addStickerMetadata(webpBuffer, config.name, 'WhatsApp Sticker');
+            // Read and return animated sticker
+            return await fs.readFile(outputPath);
         } finally {
             // Cleanup
             await Promise.allSettled([
@@ -343,45 +330,6 @@ export class StickerCommand extends CommandInterface {
                 reject(new Error('FFmpeg timeout'));
             }, 30000);
         });
-    }
-
-    /**
-     * Add sticker metadata (author and pack name)
-     */
-    private async addStickerMetadata(
-        webpBuffer: Buffer,
-        author: string,
-        packName: string
-    ): Promise<Buffer> {
-        try {
-            // Load the WebP image
-            const img = new WebP.Image();
-            await img.load(webpBuffer);
-
-            // Create EXIF metadata for WhatsApp stickers
-            const exifData = {
-                'sticker-pack-id': 'com.whatsapp.nexa',
-                'sticker-pack-name': packName,
-                'sticker-pack-publisher': author,
-            };
-
-            // Convert EXIF data to JSON string
-            const exifJson = JSON.stringify(exifData);
-
-            // Set EXIF metadata
-            img.exif = Buffer.from([
-                0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x57,
-                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00,
-                ...Buffer.from(exifJson, 'utf-8')
-            ]);
-
-            // Save and return the modified WebP
-            return await img.save(null);
-        } catch (error) {
-            log.error('Error adding sticker metadata:', error);
-            // Return original buffer if metadata addition fails
-            return webpBuffer;
-        }
     }
 }
 
