@@ -16,8 +16,8 @@ export class StickerCommand extends CommandInterface {
         aliases: ['s', 'stiker'],
         description: 'Convert gambar, video, atau GIF menjadi sticker WhatsApp.',
         helpText: `*Cara pakai:* 🎨
+• Kirim gambar/video dengan caption *${BotConfig.prefix}sticker*
 • Reply gambar/video/GIF dengan *${BotConfig.prefix}sticker*
-• Kirim *${BotConfig.prefix}sticker* lalu kirim gambar
 
 *Opsi:*
 • *${BotConfig.prefix}sticker --crop* — Crop ke tengah (512x512)
@@ -28,6 +28,7 @@ export class StickerCommand extends CommandInterface {
 • Video: maksimal 10 detik (frame pertama akan dipakai)
 
 *Contoh:*
+• Kirim gambar dengan caption: *${BotConfig.prefix}s*
 • Reply gambar: *${BotConfig.prefix}s*
 • Crop mode: *${BotConfig.prefix}s --crop*
 
@@ -56,11 +57,39 @@ export class StickerCommand extends CommandInterface {
             // Check for crop flag
             const useCrop = args.includes('--crop');
 
-            // Try to get media from quoted message
             let mediaBuffer: Buffer | null = null;
             let mediaType: 'image' | 'video' | null = null;
 
-            if (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+            // Priority 1: Check direct media message (image/video sent with command in caption)
+            if (msg.message?.imageMessage) {
+                mediaType = 'image';
+                const stream = await downloadMediaMessage(
+                    <WAMessage>msg,
+                    'buffer',
+                    {},
+                    {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        logger: log as any,
+                        reuploadRequest: sock.updateMediaMessage,
+                    }
+                );
+                mediaBuffer = stream ? Buffer.from(stream) : null;
+            } else if (msg.message?.videoMessage) {
+                mediaType = 'video';
+                const stream = await downloadMediaMessage(
+                    <WAMessage>msg,
+                    'buffer',
+                    {},
+                    {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        logger: log as any,
+                        reuploadRequest: sock.updateMediaMessage,
+                    }
+                );
+                mediaBuffer = stream ? Buffer.from(stream) : null;
+            }
+            // Priority 2: Check for quoted/replied message
+            else if (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
                 const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
 
                 if (quoted.imageMessage) {
@@ -115,38 +144,10 @@ export class StickerCommand extends CommandInterface {
                 }
             }
 
-            // If no quoted media, check direct message
-            if (!mediaBuffer && msg.message?.imageMessage) {
-                mediaType = 'image';
-                const stream = await downloadMediaMessage(
-                    <WAMessage>msg,
-                    'buffer',
-                    {},
-                    {
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        logger: log as any,
-                        reuploadRequest: sock.updateMediaMessage,
-                    }
-                );
-                mediaBuffer = stream ? Buffer.from(stream) : null;
-            } else if (!mediaBuffer && msg.message?.videoMessage) {
-                mediaType = 'video';
-                const stream = await downloadMediaMessage(
-                    <WAMessage>msg,
-                    'buffer',
-                    {},
-                    {
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        logger: log as any,
-                        reuploadRequest: sock.updateMediaMessage,
-                    }
-                );
-                mediaBuffer = stream ? Buffer.from(stream) : null;
-            }
 
             if (!mediaBuffer || !mediaType) {
                 await sock.sendMessage(jid, {
-                    text: `${config.emoji.error} Mana gambar/video-nya bestie? 🤔\n\n*Cara pakai:*\n• Reply gambar/video dengan *${config.prefix}sticker*\n• Atau kirim *${config.prefix}sticker* lalu kirim gambarnya\n\nPake *--crop* buat crop mode!`,
+                    text: `${config.emoji.error} Mana gambar/video-nya bestie? 🤔\n\n*Cara pakai:*\n• Kirim gambar/video dengan caption *${config.prefix}sticker*\n• Reply gambar/video dengan *${config.prefix}sticker*\n\nPake *--crop* buat crop mode!`,
                 });
                 return;
             }
