@@ -9,6 +9,7 @@ import {promises as fs} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
 import {randomUUID} from 'crypto';
+import * as WebP from 'node-webpmux';
 
 export class StickerCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
@@ -342,10 +343,35 @@ export class StickerCommand extends CommandInterface {
         author: string,
         packName: string
     ): Promise<Buffer> {
-        // For simplicity, we'll return the buffer as-is
-        // WhatsApp will accept WebP without explicit EXIF metadata
-        // If you need proper metadata, you can use a library like 'node-webpmux'
-        return webpBuffer;
+        try {
+            // Load the WebP image
+            const img = new WebP.Image();
+            await img.load(webpBuffer);
+
+            // Create EXIF metadata for WhatsApp stickers
+            const exifData = {
+                'sticker-pack-id': 'com.whatsapp.nexa',
+                'sticker-pack-name': packName,
+                'sticker-pack-publisher': author,
+            };
+
+            // Convert EXIF data to JSON string
+            const exifJson = JSON.stringify(exifData);
+
+            // Set EXIF metadata
+            img.exif = Buffer.from([
+                0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x57,
+                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00,
+                ...Buffer.from(exifJson, 'utf-8')
+            ]);
+
+            // Save and return the modified WebP
+            return await img.save(null);
+        } catch (error) {
+            log.error('Error adding sticker metadata:', error);
+            // Return original buffer if metadata addition fails
+            return webpBuffer;
+        }
     }
 }
 
