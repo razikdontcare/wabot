@@ -160,11 +160,6 @@ export class StickerCommand extends CommandInterface {
                 return;
             }
 
-            // Send processing message
-            await sock.sendMessage(jid, {
-                text: `${config.emoji.info} Lagi bikin sticker-nya... tunggu sebentar ya! ✨`,
-            });
-
             // Process media to sticker
             let stickerBuffer: Buffer;
 
