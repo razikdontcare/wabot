@@ -1,5 +1,5 @@
-import axios from 'axios';
 import {log} from '../../infrastructure/config/config.js';
+import {createFetchClient} from './fetchClient.js';
 
 export type FufufafaCommentsResponse = {
     id: number;
@@ -11,10 +11,9 @@ export type FufufafaCommentsResponse = {
 
 const BASE_URL = 'https://fufufafapi.vanirvan.my.id';
 
-const fufufafaClient = axios.create({
+const fufufafaClient = createFetchClient({
     baseURL: BASE_URL,
     timeout: 5000,
-    family: 4,
 });
 
 export async function getRandomFufufafaComment(): Promise<FufufafaCommentsResponse> {

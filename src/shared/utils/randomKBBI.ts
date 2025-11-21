@@ -1,5 +1,5 @@
-import axios from 'axios';
 import {log} from '../../infrastructure/config/config.js';
+import {createFetchClient} from './fetchClient.js';
 
 export type KBBIResponse = {
     lemma: string;
@@ -8,10 +8,9 @@ export type KBBIResponse = {
 
 const BASE_URL = 'https://kbbi.raf555.dev';
 
-const kbbiClient = axios.create({
+const kbbiClient = createFetchClient({
     baseURL: BASE_URL,
     timeout: 5000,
-    family: 4,
 });
 
 export async function getRandomKBBI(): Promise<KBBIResponse> {

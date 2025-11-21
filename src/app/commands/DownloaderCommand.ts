@@ -1,4 +1,3 @@
-import axios, {AxiosResponse} from 'axios';
 import {proto} from 'baileys';
 import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
 import {BotConfig, getCurrentConfig, log} from '../../infrastructure/config/config.js';
@@ -7,6 +6,7 @@ import {SessionService} from '../../domain/services/SessionService.js';
 import extractUrlsFromText from '../../shared/utils/extractUrlsFromText.js';
 import {mimeType} from 'mime-type/with-db';
 import {convertMp3ToOgg} from '../../shared/utils/ffmpeg.js';
+import {createFetchClient, FetchResponse, isFetchError} from '../../shared/utils/fetchClient.js';
 
 type Status = 'tunnel' | 'redirect' | 'error' | 'picker' | 'local-processing';
 
@@ -72,16 +72,15 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
 
     private BASE_URL = 'https://cobalt.razik.net';
     private TIKTOK_BASE_URL = 'https://ttdl.razik.net/api/cobalt';
-    private client = axios.create({
+    private client = createFetchClient({
         baseURL: this.BASE_URL,
-        timeout: 15000, // Increased timeout for better reliability
-        family: 4,
+        timeout: 15000,
         headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            'User-Agent': 'WhatsApp-FunBot/1.0.0', // Add user agent for better compatibility
+            'User-Agent': 'WhatsApp-FunBot/1.0.0',
         },
-        validateStatus: (status) => status < 500, // Don't throw on 4xx errors
+        validateStatus: (status) => status < 500,
     });
 
     async handleCommand(
@@ -234,21 +233,27 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
                         });
                     } else if (mediaType === 'audio') {
                         try {
-                            const resp = await axios.get(mediaResponse.url, {
-                                responseType: 'arraybuffer',
-                                family: 4,
-                                timeout: 30000, // Increased timeout for audio files
-                                maxContentLength: 50 * 1024 * 1024, // 50MB limit
-                                maxBodyLength: 50 * 1024 * 1024, // 50MB limit
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+                            const resp = await fetch(mediaResponse.url, {
+                                signal: controller.signal,
                             });
 
-                            const audioBuffer = Buffer.from(resp.data);
+                            clearTimeout(timeoutId);
 
-                            // Check buffer size before processing
-                            if (audioBuffer.length > 50 * 1024 * 1024) {
-                                // 50MB
+                            if (!resp.ok) {
+                                throw new Error(`HTTP ${resp.status}`);
+                            }
+
+                            const arrayBuffer = await resp.arrayBuffer();
+
+                            // Check buffer size before processing (50MB limit)
+                            if (arrayBuffer.byteLength > 50 * 1024 * 1024) {
                                 throw new Error('Audio file too large');
                             }
+
+                            const audioBuffer = Buffer.from(arrayBuffer);
 
                             // Convert MP3 to OGG if needed
                             const oggBuffer = await convertMp3ToOgg(audioBuffer);
@@ -422,8 +427,8 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
         } catch (error) {
             log.error('Error downloading media:', error);
 
-            // Handle specific axios errors
-            if (axios.isAxiosError(error)) {
+            // Handle specific fetch errors
+            if (isFetchError(error)) {
                 if (error.code === 'ECONNABORTED') {
                     return new Error('Yah, server lama banget responnya. Timeout deh! Coba lagi nanti ya 😴');
                 }
@@ -464,29 +469,42 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
         requestBody: CobaltRequestBody,
         maxRetries: number = 2,
         endpoint?: string
-    ): Promise<AxiosResponse<CobaltResponse>> {
+    ): Promise<FetchResponse<CobaltResponse>> {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let lastError: any;
 
         for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
             try {
                 const targetUrl = endpoint ? endpoint : `${this.BASE_URL}/`;
-                const response = await axios.post(targetUrl, requestBody, {
-                    timeout: 15000,
-                    family: 4,
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+                const response = await fetch(targetUrl, {
+                    method: 'POST',
                     headers: {
                         Accept: 'application/json',
                         'Content-Type': 'application/json',
                         'User-Agent': 'WhatsApp-FunBot/1.0.0',
                     },
-                    validateStatus: (status) => (status ?? 0) < 500,
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal,
                 });
-                return response as AxiosResponse<CobaltResponse>;
+
+                clearTimeout(timeoutId);
+
+                const data = await response.json();
+
+                return {
+                    data,
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers,
+                } as FetchResponse<CobaltResponse>;
             } catch (error) {
                 lastError = error;
 
                 // Don't retry on client errors (4xx) or specific server errors
-                if (axios.isAxiosError(error)) {
+                if (isFetchError(error)) {
                     const status = error.response?.status;
                     if (status && (status < 500 || status === 503)) {
                         // Don't retry on 4xx errors or 503 (service unavailable)

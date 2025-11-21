@@ -2,7 +2,7 @@ import {proto} from 'baileys';
 import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
 import {SessionService} from '../../domain/services/SessionService.js';
-import axios, {AxiosError} from 'axios';
+import {isFetchError} from '../../shared/utils/fetchClient.js';
 
 export class ImagineCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
@@ -69,47 +69,57 @@ export class ImagineCommand extends CommandInterface {
 
             console.log(`[ImagineCommand] Generating image for prompt: "${prompt}"`);
 
-            const response = await axios.get(imageUrl, {
-                responseType: 'arraybuffer',
-                timeout: 45000, // Increased timeout for better reliability
-                maxRedirects: 5,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                },
-            });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-            if (response.status !== 200) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            try {
+                const response = await fetch(imageUrl, {
+                    signal: controller.signal,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    },
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+
+                if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+                    throw new Error('Empty response data');
+                }
+
+                const imageBuffer = Buffer.from(arrayBuffer);
+
+                // Validate image buffer
+                if (imageBuffer.length < 1000) {
+                    // Assuming valid images are at least 1KB
+                    throw new Error('Invalid image data received');
+                }
+
+                await sock.sendMessage(
+                    jid,
+                    {
+                        image: imageBuffer,
+                        caption: `visi lu udah jadi kenyataan bestie ✨\nprompt: "${prompt}"\n\nini mah juara banget, sukses total! 💅`,
+                    },
+                );
+
+                console.log(`[ImagineCommand] Successfully generated image for user: ${user}`);
+            } catch (fetchError: any) {
+                clearTimeout(timeoutId);
+                throw fetchError;
             }
-
-            if (!response.data || response.data.byteLength === 0) {
-                throw new Error('Empty response data');
-            }
-
-            const imageBuffer = Buffer.from(response.data);
-
-            // Validate image buffer
-            if (imageBuffer.length < 1000) {
-                // Assuming valid images are at least 1KB
-                throw new Error('Invalid image data received');
-            }
-
-            await sock.sendMessage(
-                jid,
-                {
-                    image: imageBuffer,
-                    caption: `visi lu udah jadi kenyataan bestie ✨\nprompt: "${prompt}"\n\nini mah juara banget, sukses total! 💅`,
-                },
-            );
-
-            console.log(`[ImagineCommand] Successfully generated image for user: ${user}`);
         } catch (error) {
             console.error('[ImagineCommand] Error occurred:', error);
 
             let errorMessage = 'duh ada yang error nih, gue ga mood sama situasi ini 😭';
 
-            if (error instanceof AxiosError) {
-                if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+            if (isFetchError(error)) {
+                if (error.code === 'ECONNABORTED' || error.name === 'AbortError') {
                     errorMessage =
                         'bestie AI nya lama banget respond... kayaknya inet lemot deh 📶💔\n\ncoba lagi bentar lagi ya!';
                 } else if (error.response?.status === 429) {

@@ -3,7 +3,7 @@ import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
 import {BotConfig} from '../../infrastructure/config/config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
 import {SessionService} from '../../domain/services/SessionService.js';
-import axios, {AxiosResponse} from 'axios';
+import {createFetchClient, FetchResponse} from '../../shared/utils/fetchClient.js';
 
 type LyricsResponse = {
     id: number;
@@ -34,10 +34,9 @@ export class LyricsFindCommand extends CommandInterface {
     };
 
     private baseUrl = 'https://lrclib.net/api';
-    private client = axios.create({
+    private client = createFetchClient({
         baseURL: this.baseUrl,
-        family: 4, // Use IPv4
-        timeout: 5000, // Set a timeout of 5 seconds
+        timeout: 5000,
     });
 
     async handleCommand(
@@ -81,7 +80,7 @@ export class LyricsFindCommand extends CommandInterface {
         try {
             const response = (await this.client.get('/search', {
                 params: {q: query},
-            })) as AxiosResponse<LyricsResponse[]>;
+            })) as FetchResponse<LyricsResponse[]>;
             if (response.data && response.data.length > 0) {
                 return response.data[0];
             }

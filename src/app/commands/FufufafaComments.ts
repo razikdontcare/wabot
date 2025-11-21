@@ -1,4 +1,3 @@
-import axios from 'axios';
 import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
 import {BotConfig, log} from '../../infrastructure/config/config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
@@ -47,15 +46,13 @@ export class FufufafaComments extends CommandInterface {
             }
 
             const imageBuffer = !args.includes('textonly')
-                ? await axios.get(fufufafaComments.image_url, {
-                    responseType: 'arraybuffer',
-                    timeout: 5000,
-                    family: 4,
-                })
+                ? await fetch(fufufafaComments.image_url, {
+                    signal: AbortSignal.timeout(5000),
+                }).then(res => res.arrayBuffer())
                 : null;
 
-            const image = !args.includes('textonly')
-                ? await sharp(imageBuffer?.data).jpeg({quality: IMAGE_QUALITY, mozjpeg: true}).toBuffer()
+            const image = !args.includes('textonly') && imageBuffer
+                ? await sharp(Buffer.from(imageBuffer)).jpeg({quality: IMAGE_QUALITY, mozjpeg: true}).toBuffer()
                 : null;
 
             const caption = `${fufufafaComments.content}\n\nPosted on ${new Date(
