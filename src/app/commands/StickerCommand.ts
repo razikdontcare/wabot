@@ -246,7 +246,7 @@ export class StickerCommand extends CommandInterface {
             await fs.writeFile(inputPath, videoBuffer);
 
             // Build ffmpeg filter for sticker conversion
-            let vf = 'fps=15'; // Set to 15 fps for smaller file size
+            let vf = 'fps=10'; // Set to 10 fps for smaller file size (reduced from 15)
 
             if (useCrop) {
                 // Crop to center square and resize
@@ -257,7 +257,7 @@ export class StickerCommand extends CommandInterface {
             }
 
             // Convert video to animated WebP (max 10 seconds)
-            // Using -vcodec libwebp_anim for better animated sticker support
+            // Optimized settings for smaller file size while maintaining acceptable quality
             await this.executeFFmpeg([
                 '-i',
                 inputPath,
@@ -270,13 +270,13 @@ export class StickerCommand extends CommandInterface {
                 '-lossless',
                 '0',
                 '-compression_level',
-                '4',
+                '6', // Increased compression (0-6, higher = more compression)
                 '-q:v',
-                '90',
+                '75', // Reduced quality from 90 to 75 for smaller size
                 '-loop',
                 '0', // Loop forever
                 '-preset',
-                'picture',
+                'picture', // Good preset for stickers
                 '-an', // Remove audio
                 '-f',
                 'webp',
