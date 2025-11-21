@@ -55,12 +55,38 @@ jobs:
           
           # Get recommended bump level
           if [ "$LATEST_TAG" != "v0.0.0" ]; then
-            BUMP=$(conventional-recommended-bump -p angular --tag-prefix "v" || echo "patch")
+            echo "Analyzing commits from $LATEST_TAG to HEAD"
+            echo "--- Recent commits ---"
+            git log $LATEST_TAG..HEAD --pretty=format:"%s" | head -20
+            echo ""
+            echo "--- End of commits ---"
+          
+            # Try conventional-recommended-bump first
+            BUMP=$(conventional-recommended-bump -p angular --tag-prefix "v" 2>&1 | tail -1 || echo "")
+            echo "Conventional-recommended-bump result: '$BUMP'"
+          
+            # If the result is not a valid bump level, manually analyze commits
+            if [[ ! "$BUMP" =~ ^(major|minor|patch)$ ]]; then
+              echo "Tool failed or returned invalid result, manually analyzing commits..."
+          
+              # Check for breaking changes (major)
+              if git log $LATEST_TAG..HEAD --pretty=format:"%s%n%b" | grep -q "BREAKING CHANGE\|^[a-z]*!:"; then
+                BUMP="major"
+                echo "Found breaking changes"
+              # Check for new features (minor)
+              elif git log $LATEST_TAG..HEAD --pretty=format:"%s" | grep -q "^feat\|^feat("; then
+                BUMP="minor"
+                echo "Found feature commits"
+              else
+                BUMP="patch"
+                echo "Only fixes/chores found"
+              fi
+            fi
           else
             BUMP="minor"
           fi
           
-          echo "Recommended bump: $BUMP"
+          echo "Final recommended bump: $BUMP"
           
           # Apply version bump
           if [ "$BUMP" = "major" ]; then
