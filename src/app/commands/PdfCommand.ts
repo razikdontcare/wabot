@@ -22,6 +22,8 @@ export class PdfCommand extends CommandInterface {
 • Reply gambar yang sudah dikirim dengan *${BotConfig.prefix}pdf add* — Tambah gambar dari pesan lama
 • *${BotConfig.prefix}pdf done [nama]* — Selesai & buat PDF
 
+*'toimage' is temporarily disabled due to technical limitations.*
+
 *Atau:*
 • Reply gambar dengan *${BotConfig.prefix}pdf* (langsung jadi PDF 1 halaman)
 • Reply PDF buatan bot dengan *${BotConfig.prefix}pdf toimage* (ubah kembali ke gambar per halaman)
@@ -41,7 +43,7 @@ export class PdfCommand extends CommandInterface {
 • (kirim gambar 2)
 • Reply gambar lama: *${BotConfig.prefix}pdf add*
 • *${BotConfig.prefix}pdf done Laporan_Desember*
-• Reply file PDF: *${BotConfig.prefix}pdf toimage*
+• Reply file PDF: *${BotConfig.prefix}pdf toimage* 
 • Reply file PDF ambil sebagian: *${BotConfig.prefix}pdf toimage 4-7*
 
 *Keluar dari sesi:*
