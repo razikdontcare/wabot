@@ -43,13 +43,14 @@ export interface TrackingRecord {
     milestone_name: string;
     current_location: TrackingRecordLocation;
     next_location: TrackingRecordLocation;
+    actual_time: number;
 
     [key: string]: any;
 }
 
 export interface SPXTrackingResponse {
     awb: string;
-    deliver_type: string;
+    deliver_type: number;
     receiver_name: string;
     records: TrackingRecord[];
 }
@@ -193,24 +194,42 @@ export class CekResiCommand extends CommandInterface {
             throw new Error('Nomor resi tidak ditemukan atau belum ada update.');
         }
 
+        // Map deliver_type number to text
+        const deliverTypeMap: Record<number, string> = {
+            0: 'Perlu Dikirim',
+            1: 'Dalam Proses Pengiriman',
+            2: 'Dalam Pengiriman',
+            3: 'Terkirim'
+        };
+        const deliverTypeText = deliverTypeMap[data.deliver_type] || 'N/A';
+
         let message = `📦 *TRACKING SHOPEE EXPRESS*\n\n`;
         message += `🔢 *AWB:* ${data.awb}\n`;
         message += `👤 *Penerima:* ${data.receiver_name || 'N/A'}\n`;
-        message += `📝 *Tipe:* ${data.deliver_type || 'N/A'}\n\n`;
+        message += `📝 *Tipe:* ${deliverTypeText}\n\n`;
         message += `━━━━━━━━━━━━━━━━\n\n`;
 
-        // Sort records by timestamp (newest first)
-        const sortedRecords = [...data.records].reverse();
+        // Sort records by actual_time (newest first)
+        const sortedRecords = [...data.records].sort((a, b) => b.actual_time - a.actual_time);
 
         sortedRecords.forEach((record, index) => {
             const status = record.milestone_name || record.tracking_name;
             const description = record.buyer_description || record.description || 'N/A';
             const location = record.current_location?.location_name || 'N/A';
 
+            // Format timestamp
+            const timestamp = record.actual_time
+                ? new Date(record.actual_time * 1000).toLocaleString('id-ID', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                    timeZone: 'Asia/Jakarta'
+                })
+                : record.tracking_code || 'N/A';
+
             message += `*${index + 1}. ${status}*\n`;
             message += `📍 ${location}\n`;
             message += `📝 ${description}\n`;
-            message += `⏰ ${record.tracking_code || ''}\n\n`;
+            message += `⏰ ${timestamp}\n\n`;
         });
 
         message += `━━━━━━━━━━━━━━━━\n`;
