@@ -55,7 +55,7 @@ export interface SPXTrackingResponse {
     records: TrackingRecord[];
 }
 
-const BASE_URL = 'https://cekresi.razik.net';
+const BASE_URL = 'http://cekresi-api:5000';
 
 export class CekResiCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
