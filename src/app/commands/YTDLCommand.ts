@@ -45,6 +45,7 @@ export class YTDLCommand extends CommandInterface {
         }
 
         const downloadMode = args.includes('audio') ? 'audio' : 'video';
+        const sendAsDocument = args.includes('document');
         log.info('Download mode set to:', downloadMode);
 
         // 2. Try to extract URL from args or quoted message
@@ -185,11 +186,19 @@ export class YTDLCommand extends CommandInterface {
 
             if (downloadMode === 'audio') {
                 try {
-                    await this.sendWithTimeout(sock, jid, {
-                        audio: response.buffer,
-                        mimetype: 'audio/mp4',
-                        fileName: response.filename,
-                    });
+                    if (sendAsDocument) {
+                        await this.sendWithTimeout(sock, jid, {
+                            document: response.buffer,
+                            mimetype: 'audio/mp3',
+                            fileName: response.filename,
+                        });
+                    } else {
+                        await this.sendWithTimeout(sock, jid, {
+                            audio: response.buffer,
+                            mimetype: 'audio/mp4',
+                            fileName: response.filename,
+                        });
+                    }
                 } catch (error) {
                     log.error('Failed to send audio:', error);
                     await sock.sendMessage(jid, {
@@ -207,11 +216,19 @@ export class YTDLCommand extends CommandInterface {
                         });
                     }
 
-                    await this.sendWithTimeout(sock, jid, {
-                        video: response.buffer,
-                        mimetype: 'video/mp4',
-                        fileName: response.filename,
-                    });
+                    if (sendAsDocument) {
+                        await this.sendWithTimeout(sock, jid, {
+                            document: response.buffer,
+                            mimetype: 'video/mp4',
+                            fileName: response.filename,
+                        });
+                    } else {
+                        await this.sendWithTimeout(sock, jid, {
+                            video: response.buffer,
+                            mimetype: 'video/mp4',
+                            fileName: response.filename,
+                        });
+                    }
                 } catch (error) {
                     log.error('Failed to send video:', error);
                     if (error instanceof Error && error.message.includes('timeout')) {
