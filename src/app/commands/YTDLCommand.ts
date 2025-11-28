@@ -190,13 +190,13 @@ export class YTDLCommand extends CommandInterface {
                         await this.sendWithTimeout(sock, jid, {
                             document: response.buffer,
                             mimetype: 'audio/mp3',
-                            fileName: response.filename,
+                            fileName: this.normalizeFilename(title) + '.mp3',
                         });
                     } else {
                         await this.sendWithTimeout(sock, jid, {
                             audio: response.buffer,
-                            mimetype: 'audio/mp4',
-                            fileName: response.filename,
+                            mimetype: 'audio/mp3',
+                            fileName: this.normalizeFilename(title) + '.mp3',
                         });
                     }
                 } catch (error) {
@@ -220,13 +220,13 @@ export class YTDLCommand extends CommandInterface {
                         await this.sendWithTimeout(sock, jid, {
                             document: response.buffer,
                             mimetype: 'video/mp4',
-                            fileName: response.filename,
+                            fileName: this.normalizeFilename(title) + '.mp4',
                         });
                     } else {
                         await this.sendWithTimeout(sock, jid, {
                             video: response.buffer,
                             mimetype: 'video/mp4',
-                            fileName: response.filename,
+                            fileName: this.normalizeFilename(title) + '.mp4',
                         });
                     }
                 } catch (error) {
@@ -273,6 +273,16 @@ export class YTDLCommand extends CommandInterface {
                     reject(error);
                 });
         });
+    }
+
+    private normalizeFilename(text: string): string {
+        return text
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '-')
+            .replace(/[^a-z0-9-]/g, '')
+            .replace(/-+/g, '-')
+            .replace(/^-+|-+$/g, '')
     }
 
     private formatDuration(seconds: number): string {
