@@ -70,7 +70,7 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
         vipBypassCooldown: true, // VIP users bypass cooldown
     };
 
-    private BASE_URL = 'https://cobalt.razik.net';
+    private BASE_URL = 'http://cobalt:9000';
     private client = createFetchClient({
         baseURL: this.BASE_URL,
         timeout: 15000,
