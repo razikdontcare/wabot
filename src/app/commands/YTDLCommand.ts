@@ -195,7 +195,7 @@ export class YTDLCommand extends CommandInterface {
                     } else {
                         await this.sendWithTimeout(sock, jid, {
                             audio: response.buffer,
-                            mimetype: 'audio/mp3',
+                            mimetype: 'audio/mp4',
                             fileName: this.normalizeFilename(title) + '.mp3',
                         });
                     }
