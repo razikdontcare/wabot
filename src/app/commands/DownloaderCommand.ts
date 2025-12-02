@@ -71,14 +71,13 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
     };
 
     private BASE_URL = 'https://cobalt.razik.net';
-    private TIKTOK_BASE_URL = 'https://ttdl.razik.net/api/cobalt';
     private client = createFetchClient({
         baseURL: this.BASE_URL,
         timeout: 15000,
         headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            'User-Agent': 'WhatsApp-FunBot/1.0.0',
+            'User-Agent': 'NexaBot/1.0.0',
         },
         validateStatus: (status) => status < 500,
     });
@@ -336,8 +335,7 @@ ${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
                 filenameStyle: 'basic', // Set default filename style
             };
 
-            const isTikTok = this.isTikTokUrl(url);
-            const endpoint = isTikTok ? this.TIKTOK_BASE_URL : `${this.BASE_URL}/`;
+            const endpoint = `${this.BASE_URL}/`;
             const response = await this.makeRequestWithRetry(requestBody, 2, endpoint);
 
             // Handle error responses with detailed error messages

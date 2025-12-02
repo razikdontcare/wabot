@@ -224,7 +224,6 @@ export class CekResiCommand extends CommandInterface {
 
         message += `━━━━━━━━━━━━━━━━\n`;
         message += `✅ *Status terkini:* ${sortedRecords[0]?.milestone_name || 'Unknown'}`;
-
         return message;
     }
 }
