@@ -194,19 +194,9 @@ export class CekResiCommand extends CommandInterface {
             throw new Error('Nomor resi tidak ditemukan atau belum ada update.');
         }
 
-        // Map deliver_type number to text
-        const deliverTypeMap: Record<number, string> = {
-            0: 'Perlu Dikirim',
-            1: 'Dalam Proses Pengiriman',
-            2: 'Dalam Pengiriman',
-            3: 'Terkirim'
-        };
-        const deliverTypeText = deliverTypeMap[data.deliver_type] || 'N/A';
-
         let message = `📦 *TRACKING SHOPEE EXPRESS*\n\n`;
         message += `🔢 *AWB:* ${data.awb}\n`;
         message += `👤 *Penerima:* ${data.receiver_name || 'N/A'}\n`;
-        message += `📝 *Tipe:* ${deliverTypeText}\n\n`;
         message += `━━━━━━━━━━━━━━━━\n\n`;
 
         // Sort records by actual_time (newest first)
