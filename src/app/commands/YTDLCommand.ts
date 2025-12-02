@@ -9,7 +9,7 @@ import extractUrlsFromText from '../../shared/utils/extractUrlsFromText.js';
 export class YTDLCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
         name: 'ytdl',
-        aliases: ['yt', 'youtube', 'dla'],
+        aliases: ['yt', 'youtube', 'dla', 'd'],
         description: 'Download video or audio from YouTube or other supported platform.',
         helpText: `*Usage:*
 • ${BotConfig.prefix}dla <url> — Download video or audio from YouTube or other supported platform.
