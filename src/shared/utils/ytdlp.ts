@@ -1,8 +1,8 @@
-import {spawn} from 'child_process';
-import {promises as fs} from 'fs';
-import {join} from 'path';
-import {tmpdir} from 'os';
-import {randomUUID} from 'crypto';
+import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { randomUUID } from 'crypto';
 
 interface YtDlpOptions {
     cookiesFile?: string;
@@ -91,6 +91,11 @@ export class YtDlpWrapper {
             'node',
         ];
 
+        // Add user agent for TikTok
+        if (this.isTikTokUrl(url)) {
+            args.push('--user-agent', 'curl/8.5.0');
+        }
+
         // Add proxy if specified
         if (options.proxy) {
             args.push('--proxy', options.proxy);
@@ -99,7 +104,7 @@ export class YtDlpWrapper {
         args.push(url);
 
         try {
-            const {stdout} = await this.executeCommandWithTimeout(args, 30000); // 30s timeout for info
+            const { stdout } = await this.executeCommandWithTimeout(args, 30000); // 30s timeout for info
             return JSON.parse(stdout);
         } catch (error) {
             throw new Error(`Failed to get video info: ${error}`);
@@ -153,7 +158,7 @@ export class YtDlpWrapper {
 
         try {
             // Execute yt-dlp command with timeout
-            const {stdout} = await this.executeCommandWithTimeout(args, this.DOWNLOAD_TIMEOUT, options.onProgress);
+            const { stdout } = await this.executeCommandWithTimeout(args, this.DOWNLOAD_TIMEOUT, options.onProgress);
 
             // Find the downloaded file
             const downloadedFile = await this.findDownloadedFile(tempDir, tempId);
@@ -281,7 +286,7 @@ export class YtDlpWrapper {
         }
 
         args.push('--no-playlist');
-        
+
 
         // Add no-mtime flag
         if (options.noMtime !== false) {
@@ -300,6 +305,11 @@ export class YtDlpWrapper {
         args.push('--cookies', cookiesFile);
 
         args.push('--js-runtimes', 'node');
+
+        // Add user agent for TikTok
+        if (this.isTikTokUrl(url)) {
+            args.push('--user-agent', 'curl/8.5.0');
+        }
 
         // Add proxy if specified
         if (options.proxy) {
@@ -418,7 +428,7 @@ export class YtDlpWrapper {
                     clearTimeout(timeout);
 
                     if (code === 0) {
-                        resolve({stdout, stderr});
+                        resolve({ stdout, stderr });
                     } else {
                         reject(new Error(`Process exited with code ${code}: ${stderr}`));
                     }
@@ -564,6 +574,10 @@ export class YtDlpWrapper {
                 });
             }
         }
+    }
+
+    private isTikTokUrl(url: string): boolean {
+        return url.includes('tiktok.com') || url.includes('vm.tiktok.com') || url.includes('vt.tiktok.com');
     }
 
     private convertToBytes(value: number, unit: string): number {
