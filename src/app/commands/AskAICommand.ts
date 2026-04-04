@@ -48,7 +48,7 @@ export class AskAICommand extends CommandInterface {
   private ai = new Groq({ apiKey: BotConfig.groqApiKey });
   private conversationService = AIConversationService.getInstance();
   private responseService = AIResponseService.getInstance();
-  private MODEL = process.env.AI_MODEL ?? "moonshotai/kimi-k2-instruct-0905";
+  private MODEL = process.env.AI_MODEL ?? "openai/gpt-oss-120b";
 
   async handleCommand(
     args: string[],
