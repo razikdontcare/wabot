@@ -227,7 +227,6 @@ export class AskAICommand extends CommandInterface {
         stream: false,
         stop: null,
         tools,
-        tool_choice: "auto",
       });
 
       const responseMessage = response.choices[0].message;
