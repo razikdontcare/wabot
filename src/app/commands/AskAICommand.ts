@@ -374,12 +374,10 @@ export class AskAICommand extends CommandInterface {
         const secondResponse = await this.ai.chat.completions.create({
           messages,
           model: this.MODEL,
-          temperature: 0.4,
+          temperature: 0.3,
           max_completion_tokens: 1024,
-          top_p: 0.95,
           stream: false,
           stop: null,
-          seed: 28112004,
         });
 
         return (
