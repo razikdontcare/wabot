@@ -378,6 +378,11 @@ export class AskAICommand extends CommandInterface {
           max_completion_tokens: 1024,
           stream: false,
           stop: null,
+          tools: [
+            {
+              type: "browser_search",
+            },
+          ],
         });
 
         return (

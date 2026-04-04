@@ -39,7 +39,7 @@
     "chalk": "^5.4.1",
     "chrono-node": "^2.9.0",
     "dotenv": "^16.5.0",
-    "groq-sdk": "^0.23.0",
+    "groq-sdk": "^1.1.2",
     "hono": "^4.7.7",
     "jimp": "^1.6.0",
     "link-preview-js": "^3.0.14",
