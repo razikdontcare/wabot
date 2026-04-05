@@ -38,6 +38,9 @@ export class FreeGamesCommand extends CommandInterface {
     _sessionService: SessionService,
     _msg: proto.IWebMessageInfo,
   ): Promise<void> {
+    void _sessionService;
+    void _msg;
+
     if (!jid.endsWith("@g.us")) {
       await sock.sendMessage(jid, {
         text: `${BotConfig.emoji.error} Command ini hanya bisa digunakan di grup.`,
@@ -147,10 +150,7 @@ function formatFreeGamesMessage(
   giveaway: GamerPowerGiveaway,
   targetUrl: string,
 ): string {
-  const endDate =
-    giveaway.end_date && giveaway.end_date !== "N/A"
-      ? giveaway.end_date
-      : "Tidak diketahui";
+  const endDate = formatFreeGamesEndDate(giveaway.end_date);
   const worth =
     giveaway.worth && giveaway.worth !== "N/A" ? giveaway.worth : "Gratis";
 
@@ -164,4 +164,52 @@ function formatFreeGamesMessage(
     `⏳ Berakhir: ${endDate}`,
     `🔗 Link: ${targetUrl}`,
   ].join("\n");
+}
+
+function formatFreeGamesEndDate(rawEndDate?: string): string {
+  if (!rawEndDate || rawEndDate === "N/A") {
+    return "Tidak diketahui";
+  }
+
+  const normalized = rawEndDate.trim();
+
+  const match = normalized.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/,
+  );
+
+  let parsedDate: Date | null = null;
+
+  if (match) {
+    const [, year, month, day, hour = "00", minute = "00", second = "00"] =
+      match;
+    parsedDate = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    );
+  } else {
+    const fallback = new Date(normalized);
+    if (!Number.isNaN(fallback.getTime())) {
+      parsedDate = fallback;
+    }
+  }
+
+  if (!parsedDate) {
+    return normalized;
+  }
+
+  const formatted = new Intl.DateTimeFormat("id-ID", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Jakarta",
+  }).format(parsedDate);
+
+  return `${formatted} WIB`;
 }
