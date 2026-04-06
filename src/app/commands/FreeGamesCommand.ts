@@ -208,7 +208,7 @@ function formatFreeGamesEndDate(rawEndDate?: string): string {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
-    timeZone: "Asia/Jakarta",
+    // timeZone: "Asia/Jakarta",
   }).format(parsedDate);
 
   return `${formatted} WIB`;
