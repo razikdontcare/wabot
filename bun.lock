@@ -6,7 +6,7 @@
       "dependencies": {
         "@gradio/client": "^1.15.5",
         "@hono/node-server": "^1.14.1",
-        "@tavily/core": "^0.5.10",
+        "@tavily/core": "^0.7.2",
         "axios": "^1.8.4",
         "baileys": "v7.0.0-rc.9",
         "chalk": "^5.4.1",
@@ -251,7 +251,7 @@
 
     "@rtsao/scc": ["@rtsao/scc@1.1.0", "", {}, "sha512-zt6OdqaDoOnJ1ZYsCYGt9YmWzDXl4vQdKTyJev62gFhRGKdx7mcT54V9KIjg+d2wi9EXsPvAPKe7i7WjfVWB8g=="],
 
-    "@tavily/core": ["@tavily/core@0.5.10", "", { "dependencies": { "axios": "^1.7.7", "https-proxy-agent": "^7.0.6", "js-tiktoken": "^1.0.14" } }, "sha512-HgF0FYrE/vZmh22b/IfOtZj/+EbqNC9BTTnyv2xKy4/IL8x+c1mZVXBa/iv9fy4bJozM25ELsGZPiHCXb/2gzw=="],
+    "@tavily/core": ["@tavily/core@0.7.2", "", { "dependencies": { "axios": "^1.7.7", "https-proxy-agent": "^7.0.6", "js-tiktoken": "^1.0.14" } }, "sha512-N9xfw9miPD1jyVKYTMWV1hQvWPNjATT9Hffr6tv7VMHzwOPOeBwfX/R25ZE2F7meTyq6xSeGxclWnLVH2xHqFA=="],
 
     "@tokenizer/inflate": ["@tokenizer/inflate@0.3.1", "", { "dependencies": { "debug": "^4.4.1", "fflate": "^0.8.2", "token-types": "^6.0.0" } }, "sha512-4oeoZEBQdLdt5WmP/hx1KZ6D3/Oid/0cUb2nk4F0pTDAWy+KCH3/EnAkZF/bvckWo8I33EqBm01lIPgmgc8rCA=="],
 

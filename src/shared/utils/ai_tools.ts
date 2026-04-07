@@ -5,7 +5,6 @@ import { WebSocketInfo } from "../types/types.js";
 import { proto } from "baileys";
 import type { Groq } from "groq-sdk";
 import { CommandInfo } from "../../app/handlers/CommandInterface.js";
-
 const tavilyClient = tavily({
   apiKey: BotConfig.tavilyApiKey,
 });
@@ -298,7 +297,7 @@ export async function web_search(
     }
     const response = await tavilyClient.search(query, {
       searchDepth: "advanced",
-      includeAnswer: true,
+      includeAnswer: "advanced",
       topic,
     });
     if (response.answer && response.results && response.results.length > 0) {
@@ -315,7 +314,7 @@ export async function web_search(
       return "Tidak ada hasil yang ditemukan.";
     }
   } catch (error) {
-    console.error("Error fetching Tavily search results:", error);
+    log.error("Error fetching Tavily search results:", error);
     return "Terjadi kesalahan saat melakukan pencarian.";
   }
 }

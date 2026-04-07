@@ -33,7 +33,7 @@
   "dependencies": {
     "@gradio/client": "^1.15.5",
     "@hono/node-server": "^1.14.1",
-    "@tavily/core": "^0.5.10",
+    "@tavily/core": "^0.7.2",
     "axios": "^1.8.4",
     "baileys": "v7.0.0-rc.9",
     "chalk": "^5.4.1",
