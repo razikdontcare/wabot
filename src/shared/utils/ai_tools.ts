@@ -11,9 +11,6 @@ const tavilyClient = tavily({
 
 export const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
   {
-    type: "browser_search",
-  },
-  {
     type: "function",
     function: {
       name: "web_search",

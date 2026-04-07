@@ -205,16 +205,18 @@ export class AskAICommand extends CommandInterface {
 
       // Add conversation history
       for (const message of conversationHistory) {
+        // Do not replay stored tool messages from previous turns.
+        // They may lack required metadata (tool name + paired tool_calls context)
+        // and can break provider-side validation.
+        if (message.role === "tool") {
+          continue;
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const messageObj: any = {
           role: message.role,
           content: message.content,
         };
-
-        // Add tool_call_id for tool messages
-        if (message.role === "tool" && message.tool_call_id) {
-          messageObj.tool_call_id = message.tool_call_id;
-        }
 
         messages.push(messageObj);
       }
@@ -234,7 +236,7 @@ export class AskAICommand extends CommandInterface {
 
       if (toolCalls && toolCalls.length > 0) {
         log.info(
-          `Tool calls detected: ${toolCalls.map((call) => call.function.name).join(", ")}`,
+          `Tool calls detected: ${toolCalls.map((call) => call.function?.name || "unknown_tool").join(", ")}`,
         );
         const availableFunctions = {
           web_search: web_search,
@@ -271,6 +273,10 @@ export class AskAICommand extends CommandInterface {
         for (const toolCall of toolCalls) {
           try {
             const functionName = toolCall.function.name;
+            if (!functionName) {
+              throw new Error("Tool call is missing function name");
+            }
+
             const functionToCall =
               availableFunctions[
                 functionName as keyof typeof availableFunctions
@@ -283,7 +289,7 @@ export class AskAICommand extends CommandInterface {
             // Validate and parse tool arguments
             let functionArgs;
             try {
-              functionArgs = JSON.parse(toolCall.function.arguments);
+              functionArgs = JSON.parse(toolCall.function.arguments || "{}");
             } catch (parseError) {
               throw new Error(`Invalid JSON in tool arguments: ${parseError}`);
             }
@@ -334,14 +340,8 @@ export class AskAICommand extends CommandInterface {
               role: "tool",
               content: functionResponse,
               tool_call_id: toolCall.id,
+              name: functionName,
             });
-
-            await this.conversationService.addMessage(
-              user,
-              "tool",
-              functionResponse,
-              toolCall.id,
-            );
           } catch (toolError) {
             console.error(
               `Error executing tool ${toolCall.function.name}:`,
@@ -357,14 +357,8 @@ export class AskAICommand extends CommandInterface {
               role: "tool",
               content: errorMessage,
               tool_call_id: toolCall.id,
+              name: toolCall.function.name,
             });
-
-            await this.conversationService.addMessage(
-              user,
-              "tool",
-              errorMessage,
-              toolCall.id,
-            );
           }
         }
 
@@ -375,11 +369,6 @@ export class AskAICommand extends CommandInterface {
           max_completion_tokens: 1024,
           stream: false,
           stop: null,
-          tools: [
-            {
-              type: "browser_search",
-            },
-          ],
         });
 
         return (
