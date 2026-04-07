@@ -1,26 +1,85 @@
-import {Collection, MongoClient} from 'mongodb';
-import {BotConfig} from '../../infrastructure/config/config.js';
+import { Collection, MongoClient } from "mongodb";
+import { BotConfig } from "../../infrastructure/config/config.js";
+import type { AIProviderPreference } from "../../infrastructure/config/config.js";
+import {
+  resolveAIPersonality,
+  type AIPersonality,
+} from "../../shared/utils/promptLoader.js";
 
 export interface UserPreference {
-    user: string; // WhatsApp JID
-    language?: string;
-    nickname?: string;
-    notifications?: boolean;
-    customAliases?: Record<string, string>;
+  user: string; // WhatsApp JID
+  language?: string;
+  nickname?: string;
+  notifications?: boolean;
+  customAliases?: Record<string, string>;
+  aiProviderPreference?: AIProviderPreference;
+  aiPersonalityPreference?: AIPersonality;
 }
 
 export class UserPreferenceService {
-    private collection: Collection<UserPreference>;
+  private collection: Collection<UserPreference>;
 
-    constructor(mongoClient: MongoClient, dbName = BotConfig.sessionName, collectionName = 'user_preferences') {
-        this.collection = mongoClient.db(dbName).collection(collectionName);
+  constructor(
+    mongoClient: MongoClient,
+    dbName = BotConfig.sessionName,
+    collectionName = "user_preferences",
+  ) {
+    this.collection = mongoClient.db(dbName).collection(collectionName);
+  }
+
+  async get(user: string): Promise<UserPreference | null> {
+    return this.collection.findOne({ user });
+  }
+
+  async set(user: string, data: Partial<UserPreference>): Promise<void> {
+    await this.collection.updateOne({ user }, { $set: data }, { upsert: true });
+  }
+
+  async getAIProviderPreference(
+    user: string,
+  ): Promise<AIProviderPreference | null> {
+    const preference = await this.get(user);
+    const value = preference?.aiProviderPreference;
+
+    if (value === "groq" || value === "google" || value === "auto") {
+      return value;
     }
 
-    async get(user: string): Promise<UserPreference | null> {
-        return this.collection.findOne({user});
-    }
+    return null;
+  }
 
-    async set(user: string, data: Partial<UserPreference>): Promise<void> {
-        await this.collection.updateOne({user}, {$set: data}, {upsert: true});
-    }
+  async setAIProviderPreference(
+    user: string,
+    provider: AIProviderPreference,
+  ): Promise<void> {
+    await this.set(user, { aiProviderPreference: provider });
+  }
+
+  async clearAIProviderPreference(user: string): Promise<void> {
+    await this.collection.updateOne(
+      { user },
+      { $unset: { aiProviderPreference: "" } },
+    );
+  }
+
+  async getAIPersonalityPreference(
+    user: string,
+  ): Promise<AIPersonality | null> {
+    const preference = await this.get(user);
+    return resolveAIPersonality(preference?.aiPersonalityPreference || null);
+  }
+
+  async setAIPersonalityPreference(
+    user: string,
+    personality: AIPersonality,
+  ): Promise<void> {
+    await this.set(user, { aiPersonalityPreference: personality });
+  }
+
+  async clearAIPersonalityPreference(user: string): Promise<void> {
+    await this.collection.updateOne(
+      { user },
+      { $unset: { aiPersonalityPreference: "" } },
+    );
+  }
 }
