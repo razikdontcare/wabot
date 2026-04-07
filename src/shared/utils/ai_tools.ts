@@ -3,98 +3,10 @@ import { BotConfig, log } from "../../infrastructure/config/config.js";
 import { CommandHandler } from "../../app/handlers/CommandHandler.js";
 import { WebSocketInfo } from "../types/types.js";
 import { proto } from "baileys";
-import type { Groq } from "groq-sdk";
 import { CommandInfo } from "../../app/handlers/CommandInterface.js";
 const tavilyClient = tavily({
   apiKey: BotConfig.tavilyApiKey,
 });
-
-export const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description: "Search the web for information",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "The search query to use",
-          },
-          topic: {
-            type: "string",
-            enum: ["general", "news", "finance"],
-            description:
-              "Optional topic to filter search results (general, news, finance)",
-          },
-        },
-        required: ["query"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_bot_commands",
-      description:
-        "Get a list of available bot commands, optionally filtered by query",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description:
-              "Optional filter query to search for specific commands",
-          },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_command_help",
-      description: "Get detailed help information for a specific bot command",
-      parameters: {
-        type: "object",
-        properties: {
-          commandName: {
-            type: "string",
-            description: "The name of the command to get help for",
-          },
-        },
-        required: ["commandName"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "execute_bot_command",
-      description:
-        "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
-      parameters: {
-        type: "object",
-        properties: {
-          commandName: {
-            type: "string",
-            description: "The name of the command to execute",
-          },
-          args: {
-            type: "array",
-            items: {
-              type: "string",
-            },
-            description: "Arguments to pass to the command",
-          },
-        },
-        required: ["commandName", "args"],
-      },
-    },
-  },
-];
 
 // Global variable to store CommandHandler instance
 let commandHandlerInstance: CommandHandler | null = null;

@@ -1,19 +1,30 @@
-import { proto } from "baileys";
+import { downloadMediaMessage, proto, WAMessage } from "baileys";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { BotConfig, log } from "../../infrastructure/config/config.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
-import Groq from "groq-sdk";
+import {
+  generateText,
+  stepCountIs,
+  tool as createTool,
+  type ModelMessage,
+} from "ai";
+import { z } from "zod";
+import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
 import {
   execute_bot_command,
   get_bot_commands,
   get_command_help,
-  tools,
   web_search,
 } from "../../shared/utils/ai_tools.js";
 import { loadNexaPrompt } from "../../shared/utils/promptLoader.js";
+
+interface AIImageInput {
+  dataUrl: string;
+  mimeType: string;
+}
 
 export class AskAICommand extends CommandInterface {
   static commandInfo: CommandInfo = {
@@ -45,10 +56,9 @@ export class AskAICommand extends CommandInterface {
     vipBypassCooldown: true, // VIP users bypass cooldown
   };
 
-  private ai = new Groq({ apiKey: BotConfig.groqApiKey });
+  private providerRouter = AIProviderRouterService.getInstance();
   private conversationService = AIConversationService.getInstance();
   private responseService = AIResponseService.getInstance();
-  private MODEL = process.env.AI_MODEL ?? "openai/gpt-oss-120b";
 
   async handleCommand(
     args: string[],
@@ -84,6 +94,7 @@ export class AskAICommand extends CommandInterface {
     let quotedText = "";
     let prompt = args.join(" ").trim();
     const userPushName = msg.pushName;
+    const imageInput = await this.extractImageInput(msg, jid, sock);
 
     if (
       msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage &&
@@ -103,6 +114,10 @@ export class AskAICommand extends CommandInterface {
           "\"\n\nThe user's question:\n" +
           prompt;
       }
+    }
+
+    if (!prompt && imageInput) {
+      prompt = "Tolong jelaskan isi gambar ini dengan jelas dan ringkas.";
     }
 
     if (!prompt) {
@@ -136,7 +151,7 @@ export class AskAICommand extends CommandInterface {
       }
 
       // Get AI response with conversation context and group context
-      const response = await this.getGroqCompletion(
+      const response = await this.getAICompletion(
         history,
         user,
         userPushName,
@@ -144,6 +159,7 @@ export class AskAICommand extends CommandInterface {
         jid,
         sock,
         msg,
+        imageInput,
       );
 
       // Add AI response to conversation history
@@ -172,7 +188,7 @@ export class AskAICommand extends CommandInterface {
     }
   }
 
-  async getGroqCompletion(
+  async getAICompletion(
     conversationHistory: import("../../domain/services/AIConversationService.js").AIMessage[],
     user: string,
     userPushName: string | null | undefined,
@@ -180,6 +196,7 @@ export class AskAICommand extends CommandInterface {
     jid?: string,
     sock?: WebSocketInfo,
     msg?: proto.IWebMessageInfo,
+    imageInput?: AIImageInput | null,
   ): Promise<string> {
     try {
       // Load the base prompt from markdown file
@@ -187,14 +204,17 @@ export class AskAICommand extends CommandInterface {
         groupContext,
         currentDate: new Date().toString(),
       });
-      // Build messages array for Groq API
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const messages: any[] = [
-        {
-          role: "system",
-          content: base_prompt,
-        },
-      ];
+
+      const route = this.providerRouter.getRoutedModel({
+        requiresMultimodal: Boolean(imageInput),
+      });
+
+      // Build conversation messages for AI SDK.
+      const messages: ModelMessage[] = [];
+
+      const latestUserMessageIndex = imageInput
+        ? this.findLatestUserMessageIndex(conversationHistory)
+        : -1;
 
       if (userPushName) {
         messages.push({
@@ -204,11 +224,35 @@ export class AskAICommand extends CommandInterface {
       }
 
       // Add conversation history
-      for (const message of conversationHistory) {
+      for (const [index, message] of conversationHistory.entries()) {
         // Do not replay stored tool messages from previous turns.
         // They may lack required metadata (tool name + paired tool_calls context)
         // and can break provider-side validation.
         if (message.role === "tool") {
+          continue;
+        }
+
+        if (
+          route.provider === "google" &&
+          imageInput &&
+          message.role === "user" &&
+          index === latestUserMessageIndex
+        ) {
+          messages.push({
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: message.content,
+              },
+              {
+                type: "image",
+                image: imageInput.dataUrl,
+                mediaType: imageInput.mimeType,
+              },
+            ],
+          });
+
           continue;
         }
 
@@ -221,171 +265,177 @@ export class AskAICommand extends CommandInterface {
         messages.push(messageObj);
       }
 
-      const response = await this.ai.chat.completions.create({
+      const aiTools = {
+        web_search: createTool({
+          description: "Search the web for information",
+          inputSchema: z.object({
+            query: z.string().min(1),
+            topic: z.enum(["general", "news", "finance"]).optional(),
+          }),
+          execute: async ({ query, topic }) => web_search(query, topic),
+        }),
+        get_bot_commands: createTool({
+          description:
+            "Get a list of available bot commands, optionally filtered by query",
+          inputSchema: z.object({
+            query: z.string().optional(),
+          }),
+          execute: async ({ query }) => get_bot_commands(query),
+        }),
+        get_command_help: createTool({
+          description:
+            "Get detailed help information for a specific bot command",
+          inputSchema: z.object({
+            commandName: z.string().min(1),
+          }),
+          execute: async ({ commandName }) => get_command_help(commandName),
+        }),
+        ...(jid && sock && msg
+          ? {
+              execute_bot_command: createTool({
+                description:
+                  "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
+                inputSchema: z.object({
+                  commandName: z.string().min(1),
+                  args: z.array(z.string()),
+                }),
+                execute: async ({ commandName, args }) =>
+                  execute_bot_command(commandName, args, {
+                    jid: jid!,
+                    user,
+                    sock: sock!,
+                    msg: msg!,
+                  }),
+              }),
+            }
+          : {}),
+      };
+
+      const result = await generateText({
+        model: route.model,
+        system: base_prompt,
         messages,
-        model: this.MODEL,
         temperature: 0.3,
-        max_completion_tokens: 1024,
-        stream: false,
-        stop: null,
-        tools,
+        maxOutputTokens: 1024,
+        providerOptions:
+          route.provider === "google"
+            ? {
+                google: {
+                  thinkingConfig: {
+                    thinkingLevel: "minimal",
+                  },
+                },
+              }
+            : undefined,
+        stopWhen: stepCountIs(5),
+        tools: aiTools,
+        onStepFinish: ({ toolCalls }) => {
+          log.debug(
+            `AI step finished using provider=${route.provider}, model=${route.modelId}`,
+          );
+
+          const calledTools = toolCalls
+            .map((call) => call?.toolName)
+            .filter((name): name is string => Boolean(name));
+
+          if (calledTools.length > 0) {
+            log.info(`Tool calls detected: ${calledTools.join(", ")}`);
+          }
+        },
       });
 
-      const responseMessage = response.choices[0].message;
-      const toolCalls = responseMessage.tool_calls;
-
-      if (toolCalls && toolCalls.length > 0) {
-        log.info(
-          `Tool calls detected: ${toolCalls.map((call) => call.function?.name || "unknown_tool").join(", ")}`,
-        );
-        const availableFunctions = {
-          web_search: web_search,
-          get_bot_commands: get_bot_commands,
-          get_command_help: get_command_help,
-          execute_bot_command:
-            jid && sock && msg
-              ? (commandName: string, args: string[]) =>
-                  execute_bot_command(commandName, args, {
-                    jid,
-                    user,
-                    sock,
-                    msg,
-                  })
-              : undefined,
-        };
-
-        // Add the assistant message with tool calls (not content)
-        messages.push({
-          role: "assistant",
-          content: responseMessage.content,
-          tool_calls: toolCalls,
-        });
-
-        // Add assistant message to conversation history if it has content
-        if (responseMessage.content) {
-          await this.conversationService.addMessage(
-            user,
-            "assistant",
-            responseMessage.content,
-          );
-        }
-
-        for (const toolCall of toolCalls) {
-          try {
-            const functionName = toolCall.function.name;
-            if (!functionName) {
-              throw new Error("Tool call is missing function name");
-            }
-
-            const functionToCall =
-              availableFunctions[
-                functionName as keyof typeof availableFunctions
-              ];
-
-            if (!functionToCall) {
-              throw new Error(`Function ${functionName} not found`);
-            }
-
-            // Validate and parse tool arguments
-            let functionArgs;
-            try {
-              functionArgs = JSON.parse(toolCall.function.arguments || "{}");
-            } catch (parseError) {
-              throw new Error(`Invalid JSON in tool arguments: ${parseError}`);
-            }
-
-            // Execute function based on its type
-            let functionResponse: string;
-
-            if (functionName === "web_search") {
-              if (!functionArgs.query) {
-                throw new Error("Missing required parameter: query");
-              }
-              functionResponse = await (functionToCall as typeof web_search)(
-                functionArgs.query,
-              );
-            } else if (functionName === "get_bot_commands") {
-              functionResponse = await (
-                functionToCall as typeof get_bot_commands
-              )(functionArgs.query);
-            } else if (functionName === "get_command_help") {
-              if (!functionArgs.commandName) {
-                throw new Error("Missing required parameter: commandName");
-              }
-              functionResponse = await (
-                functionToCall as typeof get_command_help
-              )(functionArgs.commandName);
-            } else if (functionName === "execute_bot_command") {
-              if (!functionArgs.commandName || !functionArgs.args) {
-                throw new Error(
-                  "Missing required parameters: commandName and args",
-                );
-              }
-              if (!functionToCall) {
-                throw new Error(
-                  "Command execution not available in this context",
-                );
-              }
-              functionResponse = await (
-                functionToCall as (
-                  cmd: string,
-                  args: string[],
-                ) => Promise<string>
-              )(functionArgs.commandName, functionArgs.args);
-            } else {
-              throw new Error(`Unknown function: ${functionName}`);
-            }
-
-            messages.push({
-              role: "tool",
-              content: functionResponse,
-              tool_call_id: toolCall.id,
-              name: functionName,
-            });
-          } catch (toolError) {
-            console.error(
-              `Error executing tool ${toolCall.function.name}:`,
-              toolError,
-            );
-
-            // Add error message to tool response
-            const errorMessage = `Error executing ${toolCall.function.name}: ${
-              toolError instanceof Error ? toolError.message : "Unknown error"
-            }`;
-
-            messages.push({
-              role: "tool",
-              content: errorMessage,
-              tool_call_id: toolCall.id,
-              name: toolCall.function.name,
-            });
-          }
-        }
-
-        const secondResponse = await this.ai.chat.completions.create({
-          messages,
-          model: this.MODEL,
-          temperature: 0.3,
-          max_completion_tokens: 1024,
-          stream: false,
-          stop: null,
-        });
-
-        return (
-          secondResponse.choices[0].message.content ||
-          "Tidak ada jawaban yang diberikan oleh AI."
-        );
-      }
-
-      if (responseMessage.content) {
-        return responseMessage.content;
-      }
-
-      return "Tidak ada jawaban yang diberikan oleh AI.";
+      return result.text || "Tidak ada jawaban yang diberikan oleh AI.";
     } catch (error) {
-      console.error("Error fetching Groq completion:", error);
+      console.error("Error fetching AI completion:", error);
       return "Terjadi kesalahan saat menghubungi AI.";
     }
+  }
+
+  private findLatestUserMessageIndex(
+    conversationHistory: import("../../domain/services/AIConversationService.js").AIMessage[],
+  ): number {
+    for (let i = conversationHistory.length - 1; i >= 0; i--) {
+      if (conversationHistory[i].role === "user") {
+        return i;
+      }
+    }
+
+    return -1;
+  }
+
+  private async extractImageInput(
+    msg: proto.IWebMessageInfo,
+    jid: string,
+    sock: WebSocketInfo,
+  ): Promise<AIImageInput | null> {
+    try {
+      if (msg.message?.imageMessage) {
+        const imageBuffer = await this.downloadImageBuffer(msg, sock);
+        if (!imageBuffer) return null;
+
+        const mimeType = msg.message.imageMessage.mimetype || "image/jpeg";
+        return {
+          dataUrl: this.toDataUrl(imageBuffer, mimeType),
+          mimeType,
+        };
+      }
+
+      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+      const quoted = contextInfo?.quotedMessage;
+
+      if (!quoted?.imageMessage) {
+        return null;
+      }
+
+      const quotedMsg: proto.IWebMessageInfo = {
+        key: {
+          remoteJid: jid,
+          fromMe: !contextInfo?.participant,
+          id: contextInfo?.stanzaId || "",
+          participant: contextInfo?.participant,
+        },
+        message: quoted,
+      };
+
+      const imageBuffer = await this.downloadImageBuffer(quotedMsg, sock);
+      if (!imageBuffer) return null;
+
+      const mimeType = quoted.imageMessage.mimetype || "image/jpeg";
+      return {
+        dataUrl: this.toDataUrl(imageBuffer, mimeType),
+        mimeType,
+      };
+    } catch (error) {
+      log.error("Failed to extract image for AI multimodal input:", error);
+      return null;
+    }
+  }
+
+  private async downloadImageBuffer(
+    msg: proto.IWebMessageInfo,
+    sock: WebSocketInfo,
+  ): Promise<Buffer | null> {
+    try {
+      const stream = await downloadMediaMessage(
+        msg as WAMessage,
+        "buffer",
+        {},
+        {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          logger: log as any,
+          reuploadRequest: sock.updateMediaMessage,
+        },
+      );
+
+      return stream ? Buffer.from(stream) : null;
+    } catch (error) {
+      log.error("Failed to download image for multimodal AI:", error);
+      return null;
+    }
+  }
+
+  private toDataUrl(buffer: Buffer, mimeType: string): string {
+    return `data:${mimeType};base64,${buffer.toString("base64")}`;
   }
 
   private async handleStatusCommand(
