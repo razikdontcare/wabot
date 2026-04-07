@@ -1,6 +1,6 @@
 import { proto } from "baileys";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
-import { BotConfig } from "../../infrastructure/config/config.js";
+import { BotConfig, getUserRoles } from "../../infrastructure/config/config.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { getMongoClient } from "../../infrastructure/config/mongo.js";
@@ -21,10 +21,12 @@ export class FreeGamesCommand extends CommandInterface {
 • /freegames off — Nonaktifkan notifikasi
 • /freegames status — Cek status notifikasi grup
 • /freegame now — Cek sekarang giveaway baru dan kirim ke grup ini
+• /freegames reset confirm — Reset cache giveaway global (admin only)
 
 *Catatan:*
 • Command ini hanya bisa dipakai di grup
-• Grup yang mengaktifkan akan dapat notifikasi giveaway baru dari GamerPower API`,
+• Grup yang mengaktifkan akan dapat notifikasi giveaway baru dari GamerPower API
+• Reset akan menghapus cache giveaway yang sudah pernah dilihat bot`,
     category: "utility",
     commandClass: FreeGamesCommand,
     cooldown: 3000,
@@ -72,6 +74,60 @@ export class FreeGamesCommand extends CommandInterface {
       return;
     }
 
+    if (action === "reset") {
+      const userRoles = await getUserRoles(user);
+      if (!userRoles.includes("admin")) {
+        await sock.sendMessage(jid, {
+          text: `${BotConfig.emoji.error} Hanya admin bot yang dapat melakukan reset free games cache.`,
+        });
+        return;
+      }
+
+      const freeGamesService = await FreeGamesService.getInstance(client);
+      const seenCount = await freeGamesService.getSeenGiveawaysCount();
+      const confirmation = args[1]?.toLowerCase();
+
+      if (confirmation !== "confirm") {
+        await sock.sendMessage(jid, {
+          text: `${BotConfig.emoji.info} Aksi ini akan menghapus *${seenCount}* data giveaway yang sudah tersimpan.
+Ketik */freegames reset confirm* untuk melanjutkan.`,
+        });
+        return;
+      }
+
+      const deletedCount = await freeGamesService.resetSeenGiveaways();
+      const bootstrapGiveaways = await freeGamesService.pollNewGiveaways({
+        bootstrapIfEmpty: true,
+        bootstrapLimit: 5,
+      });
+
+      await sock.sendMessage(jid, {
+        text: `${BotConfig.emoji.success} Reset selesai. ${deletedCount} data giveaway terhapus dari cache.`,
+      });
+
+      if (bootstrapGiveaways.length === 0) {
+        await sock.sendMessage(jid, {
+          text: `${BotConfig.emoji.info} Cache sudah di-reset, tapi saat ini tidak ada giveaway bootstrap yang bisa dikirim.`,
+        });
+        return;
+      }
+
+      await sock.sendMessage(jid, {
+        text: `${BotConfig.emoji.success} Mengirim ${bootstrapGiveaways.length} giveaway bootstrap terbaru setelah reset.`,
+      });
+
+      for (const giveaway of bootstrapGiveaways) {
+        const targetUrl = await freeGamesService.resolveRedirectLocation(
+          giveaway.open_giveaway_url,
+        );
+        await sock.sendMessage(jid, {
+          text: formatFreeGamesMessage(giveaway, targetUrl),
+        });
+      }
+
+      return;
+    }
+
     if (action === "now") {
       const setting = await groupSettingService.get(jid);
       const enabled = setting?.freeGamesEnabled === true;
@@ -88,7 +144,10 @@ export class FreeGamesCommand extends CommandInterface {
       });
 
       const freeGamesService = await FreeGamesService.getInstance(client);
-      const newGiveaways = await freeGamesService.pollNewGiveaways();
+      const newGiveaways = await freeGamesService.pollNewGiveaways({
+        bootstrapIfEmpty: true,
+        bootstrapLimit: 5,
+      });
 
       if (newGiveaways.length === 0) {
         const latestGiveaways = await freeGamesService.getLatestGiveaways(3);

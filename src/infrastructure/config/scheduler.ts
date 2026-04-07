@@ -133,7 +133,10 @@ export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
       }
 
       const freeGamesService = await FreeGamesService.getInstance(mongoClient);
-      const newGiveaways = await freeGamesService.pollNewGiveaways();
+      const newGiveaways = await freeGamesService.pollNewGiveaways({
+        bootstrapIfEmpty: true,
+        bootstrapLimit: 5,
+      });
 
       if (newGiveaways.length === 0) {
         return;

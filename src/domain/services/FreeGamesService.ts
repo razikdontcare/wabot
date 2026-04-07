@@ -26,6 +26,11 @@ interface SeenGiveaway {
   firstSeenAt: Date;
 }
 
+interface PollNewGiveawaysOptions {
+  bootstrapIfEmpty?: boolean;
+  bootstrapLimit?: number;
+}
+
 export class FreeGamesService {
   private static instance: FreeGamesService | null = null;
 
@@ -57,20 +62,17 @@ export class FreeGamesService {
     return FreeGamesService.instance;
   }
 
-  async pollNewGiveaways(): Promise<GamerPowerGiveaway[]> {
+  async pollNewGiveaways(
+    options: PollNewGiveawaysOptions = {},
+  ): Promise<GamerPowerGiveaway[]> {
+    const { bootstrapIfEmpty = true, bootstrapLimit = 3 } = options;
     const giveaways = await this.fetchGiveaways();
     if (giveaways.length === 0) {
       return [];
     }
 
-    const count = await this.collection.estimatedDocumentCount();
-    if (count === 0) {
-      await this.seedSeenGiveaways(giveaways);
-      log.info(
-        `[FreeGamesService] Initial seed completed with ${giveaways.length} giveaway(s)`,
-      );
-      return [];
-    }
+    const hasSeenData =
+      (await this.collection.findOne({}, { projection: { _id: 1 } })) !== null;
 
     const ids = giveaways
       .map((item) => item.id)
@@ -89,6 +91,28 @@ export class FreeGamesService {
 
     await this.persistSeenGiveaways(newGiveaways);
 
+    if (!hasSeenData && bootstrapIfEmpty) {
+      const safeLimit = Math.max(1, Math.floor(bootstrapLimit));
+      const bootstrapGiveaways = [...newGiveaways]
+        .sort(
+          (a, b) =>
+            this.parseDate(b.published_date).getTime() -
+            this.parseDate(a.published_date).getTime(),
+        )
+        .slice(0, safeLimit)
+        .sort(
+          (a, b) =>
+            this.parseDate(a.published_date).getTime() -
+            this.parseDate(b.published_date).getTime(),
+        );
+
+      log.info(
+        `[FreeGamesService] Initial bootstrap returning ${bootstrapGiveaways.length} giveaway(s) from ${newGiveaways.length} fetched item(s)`,
+      );
+
+      return bootstrapGiveaways;
+    }
+
     return newGiveaways.sort(
       (a, b) =>
         this.parseDate(a.published_date).getTime() -
@@ -105,6 +129,15 @@ export class FreeGamesService {
           this.parseDate(a.published_date).getTime(),
       )
       .slice(0, limit);
+  }
+
+  async getSeenGiveawaysCount(): Promise<number> {
+    return this.collection.countDocuments({});
+  }
+
+  async resetSeenGiveaways(): Promise<number> {
+    const result = await this.collection.deleteMany({});
+    return result.deletedCount ?? 0;
   }
 
   async resolveRedirectLocation(url: string): Promise<string> {
@@ -142,12 +175,32 @@ export class FreeGamesService {
       );
     }
 
-    const data = (await response.json()) as GamerPowerGiveaway[];
+    const data = (await response.json()) as Array<
+      GamerPowerGiveaway & { id: number | string }
+    >;
     if (!Array.isArray(data)) {
       return [];
     }
 
-    return data.filter((item) => typeof item.id === "number");
+    const normalized = data
+      .map((item) => {
+        const id =
+          typeof item.id === "number"
+            ? item.id
+            : Number.parseInt(String(item.id), 10);
+
+        if (!Number.isFinite(id)) {
+          return null;
+        }
+
+        return {
+          ...item,
+          id,
+        } as GamerPowerGiveaway;
+      })
+      .filter((item): item is GamerPowerGiveaway => item !== null);
+
+    return normalized;
   }
 
   private async getSingleRedirectLocation(url: string): Promise<string | null> {
@@ -179,29 +232,6 @@ export class FreeGamesService {
       return null;
     } finally {
       clearTimeout(timeout);
-    }
-  }
-
-  private async seedSeenGiveaways(
-    giveaways: GamerPowerGiveaway[],
-  ): Promise<void> {
-    if (giveaways.length === 0) {
-      return;
-    }
-
-    const now = new Date();
-    const docs: SeenGiveaway[] = giveaways.map((item) => ({
-      giveawayId: item.id,
-      publishedAt: this.parseDate(item.published_date),
-      firstSeenAt: now,
-    }));
-
-    try {
-      await this.collection.insertMany(docs, { ordered: false });
-    } catch (error) {
-      if (!isDuplicateWriteError(error)) {
-        throw error;
-      }
     }
   }
 
