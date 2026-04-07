@@ -1,7 +1,11 @@
 import { createGroq } from "@ai-sdk/groq";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
-import { BotConfig, log } from "../../infrastructure/config/config.js";
+import {
+  BotConfig,
+  log,
+  type AIProviderPreference,
+} from "../../infrastructure/config/config.js";
 
 export type AIProviderName = "groq" | "google";
 
@@ -28,7 +32,10 @@ export class AIProviderRouterService {
     return AIProviderRouterService.instance;
   }
 
-  getRoutedModel(options?: { requiresMultimodal?: boolean }): AIProviderRoute {
+  getRoutedModel(options?: {
+    requiresMultimodal?: boolean;
+    preferredProvider?: AIProviderPreference;
+  }): AIProviderRoute {
     const requiresMultimodal = options?.requiresMultimodal === true;
 
     if (requiresMultimodal) {
@@ -46,7 +53,8 @@ export class AIProviderRouterService {
       };
     }
 
-    const preferredProvider = BotConfig.aiProvider;
+    const preferredProvider =
+      options?.preferredProvider || BotConfig.aiProvider;
 
     if (preferredProvider === "google") {
       if (BotConfig.googleGenerativeAiApiKey) {

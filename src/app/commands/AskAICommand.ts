@@ -2,9 +2,15 @@ import { downloadMediaMessage, proto, WAMessage } from "baileys";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
-import { BotConfig, log } from "../../infrastructure/config/config.js";
+import {
+  BotConfig,
+  log,
+  type AIProviderPreference,
+} from "../../infrastructure/config/config.js";
+import { getMongoClient } from "../../infrastructure/config/mongo.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
+import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
 import {
   generateText,
   stepCountIs,
@@ -36,12 +42,15 @@ export class AskAICommand extends CommandInterface {
 • ${BotConfig.prefix}ai <pertanyaan> — Tanyakan sesuatu kepada AI
 • ${BotConfig.prefix}ai status — Lihat status sesi percakapan
 • ${BotConfig.prefix}ai end — Akhiri sesi percakapan
+  • ${BotConfig.prefix}ai provider — Lihat preferensi provider AI Anda
+  • ${BotConfig.prefix}ai provider <groq|google|auto|default> — Atur provider AI Anda
 • ${BotConfig.prefix}ai help — Tampilkan bantuan ini
 
 *Catatan:*
 • Setiap pengguna memiliki sesi percakapan pribadi
 • Sesi otomatis berakhir setelah 10 menit tidak aktif
 • AI akan mengingat konteks percakapan selama sesi berlangsung
+  • Jika input berupa gambar, request otomatis dirutekan ke Gemini
 
 👑 *VIP Members:* Unlimited uses tanpa cooldown!
 
@@ -59,6 +68,7 @@ export class AskAICommand extends CommandInterface {
   private providerRouter = AIProviderRouterService.getInstance();
   private conversationService = AIConversationService.getInstance();
   private responseService = AIResponseService.getInstance();
+  private userPreferenceService: UserPreferenceService | null = null;
 
   async handleCommand(
     args: string[],
@@ -86,6 +96,10 @@ export class AskAICommand extends CommandInterface {
 
         case "end":
           await this.handleEndCommand(user, jid, sock, msg);
+          return;
+
+        case "provider":
+          await this.handleProviderCommand(user, jid, sock, args.slice(1));
           return;
       }
     }
@@ -151,6 +165,8 @@ export class AskAICommand extends CommandInterface {
       }
 
       // Get AI response with conversation context and group context
+      const userProviderPreference = await this.getUserProviderPreference(user);
+
       const response = await this.getAICompletion(
         history,
         user,
@@ -160,6 +176,7 @@ export class AskAICommand extends CommandInterface {
         sock,
         msg,
         imageInput,
+        userProviderPreference,
       );
 
       // Add AI response to conversation history
@@ -197,6 +214,7 @@ export class AskAICommand extends CommandInterface {
     sock?: WebSocketInfo,
     msg?: proto.IWebMessageInfo,
     imageInput?: AIImageInput | null,
+    userProviderPreference?: AIProviderPreference | null,
   ): Promise<string> {
     try {
       // Load the base prompt from markdown file
@@ -207,7 +225,14 @@ export class AskAICommand extends CommandInterface {
 
       const route = this.providerRouter.getRoutedModel({
         requiresMultimodal: Boolean(imageInput),
+        preferredProvider: userProviderPreference || undefined,
       });
+
+      if (imageInput && userProviderPreference === "groq") {
+        log.info(
+          "AI provider preference is groq, but image input detected. Routing to google for multimodal support.",
+        );
+      }
 
       // Build conversation messages for AI SDK.
       const messages: ModelMessage[] = [];
@@ -348,6 +373,133 @@ export class AskAICommand extends CommandInterface {
     } catch (error) {
       console.error("Error fetching AI completion:", error);
       return "Terjadi kesalahan saat menghubungi AI.";
+    }
+  }
+
+  private async getUserPreferenceService(): Promise<UserPreferenceService> {
+    if (this.userPreferenceService) {
+      return this.userPreferenceService;
+    }
+
+    const mongoClient = await getMongoClient();
+    this.userPreferenceService = new UserPreferenceService(mongoClient);
+    return this.userPreferenceService;
+  }
+
+  private async getUserProviderPreference(
+    user: string,
+  ): Promise<AIProviderPreference | null> {
+    try {
+      const preferenceService = await this.getUserPreferenceService();
+      return await preferenceService.getAIProviderPreference(user);
+    } catch (error) {
+      log.error("Failed to load user AI provider preference:", error);
+      return null;
+    }
+  }
+
+  private async handleProviderCommand(
+    user: string,
+    jid: string,
+    sock: WebSocketInfo,
+    args: string[],
+  ): Promise<void> {
+    const requested = args[0]?.toLowerCase();
+
+    if (!requested || requested === "status") {
+      const userPreference = await this.getUserProviderPreference(user);
+      const effectivePreference = userPreference || BotConfig.aiProvider;
+      let textRouteText = "tidak tersedia";
+      try {
+        const textRoute = this.providerRouter.getRoutedModel({
+          preferredProvider: effectivePreference,
+        });
+        textRouteText = `${textRoute.provider} (${textRoute.modelId})`;
+      } catch (_error) {
+        textRouteText = "tidak tersedia (API key provider belum diatur)";
+      }
+
+      let imageRouteText = "google (Gemini)";
+      try {
+        const imageRoute = this.providerRouter.getRoutedModel({
+          preferredProvider: effectivePreference,
+          requiresMultimodal: true,
+        });
+        imageRouteText = `${imageRoute.provider} (${imageRoute.modelId})`;
+      } catch (_error) {
+        imageRouteText =
+          "tidak tersedia (GOOGLE_GENERATIVE_AI_API_KEY belum diatur)";
+      }
+
+      await sock.sendMessage(jid, {
+        text:
+          `*AI Provider Anda*\n\n` +
+          `• Preferensi pribadi: ${userPreference || "default bot"}\n` +
+          `• Default bot: ${BotConfig.aiProvider}\n` +
+          `• Rute teks aktif: ${textRouteText}\n` +
+          `• Rute gambar aktif: ${imageRouteText}\n\n` +
+          `Gunakan ${BotConfig.prefix}ai provider <groq|google|auto|default> untuk mengubah preferensi.`,
+      });
+      return;
+    }
+
+    try {
+      const preferenceService = await this.getUserPreferenceService();
+
+      if (requested === "default" || requested === "reset") {
+        await preferenceService.clearAIProviderPreference(user);
+
+        const textRoute = this.providerRouter.getRoutedModel({
+          preferredProvider: BotConfig.aiProvider,
+        });
+
+        await sock.sendMessage(jid, {
+          text:
+            `✅ Preferensi AI provider Anda direset ke default bot (${BotConfig.aiProvider}).\n` +
+            `Rute teks saat ini: ${textRoute.provider} (${textRoute.modelId}).`,
+        });
+        return;
+      }
+
+      if (
+        requested !== "groq" &&
+        requested !== "google" &&
+        requested !== "auto"
+      ) {
+        await sock.sendMessage(jid, {
+          text:
+            `❌ Provider tidak valid: ${requested}\n` +
+            `Gunakan: ${BotConfig.prefix}ai provider <groq|google|auto|default>`,
+        });
+        return;
+      }
+
+      await preferenceService.setAIProviderPreference(
+        user,
+        requested as AIProviderPreference,
+      );
+
+      const textRoute = this.providerRouter.getRoutedModel({
+        preferredProvider: requested,
+      });
+
+      const fallbackNote =
+        requested !== "auto" && textRoute.provider !== requested
+          ? `\nCatatan: provider ${requested} belum siap (API key tidak tersedia), jadi sistem fallback ke ${textRoute.provider}.`
+          : "";
+
+      await sock.sendMessage(jid, {
+        text:
+          `✅ Preferensi AI provider Anda diset ke *${requested}*.\n` +
+          `Rute teks saat ini: ${textRoute.provider} (${textRoute.modelId}).\n` +
+          `Untuk input gambar, sistem otomatis memakai Gemini jika tersedia.` +
+          fallbackNote,
+      });
+    } catch (error) {
+      log.error("Failed to update user AI provider preference:", error);
+      await sock.sendMessage(jid, {
+        text: "Terjadi kesalahan saat menyimpan preferensi provider AI.",
+      });
     }
   }
 
