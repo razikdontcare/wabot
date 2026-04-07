@@ -27,8 +27,9 @@ export class StickerCommand extends CommandInterface {
     helpText: `*Cara pakai:* 🎨
 • Kirim gambar/video dengan caption *${BotConfig.prefix}sticker*
 • Reply gambar/video/GIF dengan *${BotConfig.prefix}sticker*
-• Kirim link media (contoh Giphy) dengan *${BotConfig.prefix}sticker <url>*
+• Kirim link media (contoh Giphy/Tenor) dengan *${BotConfig.prefix}sticker <url>*
 • Cari GIF Giphy: *${BotConfig.prefix}sticker giphy <kata kunci>*
+• Cari GIF Tenor: *${BotConfig.prefix}sticker tenor <kata kunci>*
 
 *Opsi:*
 • *${BotConfig.prefix}sticker --crop* — Crop ke tengah (512x512)
@@ -43,6 +44,7 @@ export class StickerCommand extends CommandInterface {
 • Reply gambar: *${BotConfig.prefix}s*
 • Dari link Giphy: *${BotConfig.prefix}s https://giphy.com/gifs/...*
 • Cari di Giphy: *${BotConfig.prefix}s giphy kucing lucu*
+• Cari di Tenor: *${BotConfig.prefix}s tenor kucing lucu*
 • Crop mode: *${BotConfig.prefix}s --crop*
 
 👑 *VIP Members:* No cooldown!`,
@@ -208,6 +210,39 @@ export class StickerCommand extends CommandInterface {
           }
         }
 
+        const tenorQuery = this.extractTenorQuery(args);
+
+        if ((!mediaBuffer || !mediaType) && tenorQuery) {
+          try {
+            const tenorMediaUrl = await this.searchTenorMediaUrl(tenorQuery);
+
+            if (!tenorMediaUrl) {
+              await sock.sendMessage(jid, {
+                text: `${config.emoji.error} Gak nemu hasil Tenor buat *${tenorQuery}* 😔\n\nCoba kata kunci lain ya.`,
+              });
+              return;
+            }
+
+            const downloadedMedia =
+              await this.downloadMediaFromUrl(tenorMediaUrl);
+            mediaBuffer = downloadedMedia.buffer;
+            mediaType = downloadedMedia.mediaType;
+            sourceExtension = downloadedMedia.sourceExtension;
+          } catch (error) {
+            log.error("Failed to create sticker from Tenor query:", error);
+
+            const errorText =
+              error instanceof Error
+                ? error.message
+                : "Gagal cari GIF dari Tenor. Coba lagi ya.";
+
+            await sock.sendMessage(jid, {
+              text: `${config.emoji.error} ${errorText}`,
+            });
+            return;
+          }
+        }
+
         const sourceUrl = this.extractSourceUrl(args, msg);
 
         if ((!mediaBuffer || !mediaType) && sourceUrl) {
@@ -237,11 +272,18 @@ export class StickerCommand extends CommandInterface {
           });
           return;
         }
+
+        if ((!mediaBuffer || !mediaType) && this.isTenorMode(args)) {
+          await sock.sendMessage(jid, {
+            text: `${config.emoji.error} Kata kunci Tenor-nya mana bestie? 🤔\n\nContoh: *${config.prefix}sticker tenor kucing lucu*`,
+          });
+          return;
+        }
       }
 
       if (!mediaBuffer || !mediaType) {
         await sock.sendMessage(jid, {
-          text: `${config.emoji.error} Mana gambar/video/link media-nya bestie? 🤔\n\n*Cara pakai:*\n• Kirim gambar/video dengan caption *${config.prefix}sticker*\n• Reply gambar/video dengan *${config.prefix}sticker*\n• Kasih link media (contoh Giphy) dengan *${config.prefix}sticker <url>*\n• Cari GIF Giphy: *${config.prefix}sticker giphy <kata kunci>*\n\nPake *--crop* buat crop mode!`,
+          text: `${config.emoji.error} Mana gambar/video/link media-nya bestie? 🤔\n\n*Cara pakai:*\n• Kirim gambar/video dengan caption *${config.prefix}sticker*\n• Reply gambar/video dengan *${config.prefix}sticker*\n• Kasih link media (contoh Giphy/Tenor) dengan *${config.prefix}sticker <url>*\n• Cari GIF Giphy: *${config.prefix}sticker giphy <kata kunci>*\n• Cari GIF Tenor: *${config.prefix}sticker tenor <kata kunci>*\n\nPake *--crop* buat crop mode!`,
         });
         return;
       }
@@ -317,11 +359,37 @@ export class StickerCommand extends CommandInterface {
     return normalizedArgs[0] === "giphy";
   }
 
+  private isTenorMode(args: string[]): boolean {
+    const normalizedArgs = args
+      .filter((arg) => !arg.startsWith("--"))
+      .map((arg) => arg.toLowerCase());
+
+    return normalizedArgs[0] === "tenor";
+  }
+
   private extractGiphyQuery(args: string[]): string | null {
     const normalizedArgs = args.filter((arg) => !arg.startsWith("--"));
     if (
       normalizedArgs.length < 2 ||
       normalizedArgs[0].toLowerCase() !== "giphy"
+    ) {
+      return null;
+    }
+
+    const query = normalizedArgs.slice(1).join(" ").trim();
+    if (!query) {
+      return null;
+    }
+
+    const maybeUrl = extractUrlsFromText(query)[0];
+    return maybeUrl ? null : query;
+  }
+
+  private extractTenorQuery(args: string[]): string | null {
+    const normalizedArgs = args.filter((arg) => !arg.startsWith("--"));
+    if (
+      normalizedArgs.length < 2 ||
+      normalizedArgs[0].toLowerCase() !== "tenor"
     ) {
       return null;
     }
@@ -354,6 +422,66 @@ export class StickerCommand extends CommandInterface {
     }
 
     return `https://media.giphy.com/media/${giphyId}/giphy.mp4`;
+  }
+
+  private async searchTenorMediaUrl(query: string): Promise<string | null> {
+    const normalizedQuery = query.trim().replace(/\s+/g, " ");
+    if (!normalizedQuery) {
+      return null;
+    }
+
+    type TenorResponse = {
+      results?: Array<{
+        media_formats?: Record<string, { url?: string }>;
+      }>;
+    };
+
+    const response = await this.fetchClient.get<TenorResponse>(
+      "https://g.tenor.com/v1/search",
+      {
+        params: {
+          q: normalizedQuery,
+          key: "LIVDSRZULELA",
+          limit: 1,
+          media_filter: "mp4,gif,webm",
+          contentfilter: "medium",
+        },
+        responseType: "json",
+        timeout: this.URL_FETCH_TIMEOUT,
+        validateStatus: (status) => status >= 200 && status < 400,
+      },
+    );
+
+    const mediaFormats = response.data.results?.[0]?.media_formats;
+    return this.pickTenorMediaUrl(mediaFormats);
+  }
+
+  private pickTenorMediaUrl(
+    mediaFormats?: Record<string, { url?: string }>,
+  ): string | null {
+    if (!mediaFormats) {
+      return null;
+    }
+
+    const preferredFormats = [
+      "mp4",
+      "tinymp4",
+      "nanomp4",
+      "gif",
+      "tinygif",
+      "nanogif",
+      "webm",
+      "tinywebm",
+    ];
+
+    for (const formatKey of preferredFormats) {
+      const url = mediaFormats[formatKey]?.url;
+      if (url) {
+        return url;
+      }
+    }
+
+    return null;
   }
 
   private extractFirstGiphyIdFromHtml(html: string): string | null {
