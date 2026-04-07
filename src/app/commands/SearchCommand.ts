@@ -138,7 +138,7 @@ function formatSearchMessage(
   if (answer) {
     lines.push("");
     lines.push("📝 *Ringkasan:*");
-    lines.push(shorten(answer, 700));
+    lines.push(answer);
   }
 
   if (sources.length > 0) {
