@@ -1,6 +1,10 @@
 import { Collection, MongoClient } from "mongodb";
 import { BotConfig } from "../../infrastructure/config/config.js";
 import type { AIProviderPreference } from "../../infrastructure/config/config.js";
+import {
+  resolveAIPersonality,
+  type AIPersonality,
+} from "../../shared/utils/promptLoader.js";
 
 export interface UserPreference {
   user: string; // WhatsApp JID
@@ -9,6 +13,7 @@ export interface UserPreference {
   notifications?: boolean;
   customAliases?: Record<string, string>;
   aiProviderPreference?: AIProviderPreference;
+  aiPersonalityPreference?: AIPersonality;
 }
 
 export class UserPreferenceService {
@@ -54,6 +59,27 @@ export class UserPreferenceService {
     await this.collection.updateOne(
       { user },
       { $unset: { aiProviderPreference: "" } },
+    );
+  }
+
+  async getAIPersonalityPreference(
+    user: string,
+  ): Promise<AIPersonality | null> {
+    const preference = await this.get(user);
+    return resolveAIPersonality(preference?.aiPersonalityPreference || null);
+  }
+
+  async setAIPersonalityPreference(
+    user: string,
+    personality: AIPersonality,
+  ): Promise<void> {
+    await this.set(user, { aiPersonalityPreference: personality });
+  }
+
+  async clearAIPersonalityPreference(user: string): Promise<void> {
+    await this.collection.updateOne(
+      { user },
+      { $unset: { aiPersonalityPreference: "" } },
     );
   }
 }

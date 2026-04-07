@@ -25,7 +25,11 @@ import {
   get_command_help,
   web_search,
 } from "../../shared/utils/ai_tools.js";
-import { loadNexaPrompt } from "../../shared/utils/promptLoader.js";
+import {
+  AI_PERSONALITIES,
+  loadPersonalityPrompt,
+  type AIPersonality,
+} from "../../shared/utils/promptLoader.js";
 
 interface AIImageInput {
   dataUrl: string;
@@ -42,15 +46,17 @@ export class AskAICommand extends CommandInterface {
 • ${BotConfig.prefix}ai <pertanyaan> — Tanyakan sesuatu kepada AI
 • ${BotConfig.prefix}ai status — Lihat status sesi percakapan
 • ${BotConfig.prefix}ai end — Akhiri sesi percakapan
-  • ${BotConfig.prefix}ai provider — Lihat preferensi provider AI Anda
-  • ${BotConfig.prefix}ai provider <groq|google|auto|default> — Atur provider AI Anda
+• ${BotConfig.prefix}ai provider — Lihat preferensi provider AI Anda
+• ${BotConfig.prefix}ai provider <groq|google|auto|default> — Atur provider AI Anda
+• ${BotConfig.prefix}ai personality — Lihat personality AI Anda
+• ${BotConfig.prefix}ai personality <nexa|luna|default> — Ganti personality AI
 • ${BotConfig.prefix}ai help — Tampilkan bantuan ini
 
 *Catatan:*
 • Setiap pengguna memiliki sesi percakapan pribadi
 • Sesi otomatis berakhir setelah 10 menit tidak aktif
 • AI akan mengingat konteks percakapan selama sesi berlangsung
-  • Jika input berupa gambar, request otomatis dirutekan ke Gemini
+• Jika input berupa gambar, request otomatis dirutekan ke Gemini
 
 👑 *VIP Members:* Unlimited uses tanpa cooldown!
 
@@ -100,6 +106,11 @@ export class AskAICommand extends CommandInterface {
 
         case "provider":
           await this.handleProviderCommand(user, jid, sock, args.slice(1));
+          return;
+
+        case "personality":
+        case "persona":
+          await this.handlePersonalityCommand(user, jid, sock, args.slice(1));
           return;
       }
     }
@@ -166,6 +177,8 @@ export class AskAICommand extends CommandInterface {
 
       // Get AI response with conversation context and group context
       const userProviderPreference = await this.getUserProviderPreference(user);
+      const userPersonalityPreference =
+        await this.getUserPersonalityPreference(user);
 
       const response = await this.getAICompletion(
         history,
@@ -177,6 +190,7 @@ export class AskAICommand extends CommandInterface {
         msg,
         imageInput,
         userProviderPreference,
+        userPersonalityPreference,
       );
 
       // Add AI response to conversation history
@@ -215,13 +229,17 @@ export class AskAICommand extends CommandInterface {
     msg?: proto.IWebMessageInfo,
     imageInput?: AIImageInput | null,
     userProviderPreference?: AIProviderPreference | null,
+    userPersonalityPreference?: AIPersonality | null,
   ): Promise<string> {
     try {
       // Load the base prompt from markdown file
-      const base_prompt = loadNexaPrompt({
-        groupContext,
-        currentDate: new Date().toString(),
-      });
+      const base_prompt = loadPersonalityPrompt(
+        userPersonalityPreference || "nexa",
+        {
+          groupContext,
+          currentDate: new Date().toString(),
+        },
+      );
 
       const route = this.providerRouter.getRoutedModel({
         requiresMultimodal: Boolean(imageInput),
@@ -398,6 +416,18 @@ export class AskAICommand extends CommandInterface {
     }
   }
 
+  private async getUserPersonalityPreference(
+    user: string,
+  ): Promise<AIPersonality | null> {
+    try {
+      const preferenceService = await this.getUserPreferenceService();
+      return await preferenceService.getAIPersonalityPreference(user);
+    } catch (error) {
+      log.error("Failed to load user AI personality preference:", error);
+      return null;
+    }
+  }
+
   private async handleProviderCommand(
     user: string,
     jid: string,
@@ -499,6 +529,66 @@ export class AskAICommand extends CommandInterface {
       log.error("Failed to update user AI provider preference:", error);
       await sock.sendMessage(jid, {
         text: "Terjadi kesalahan saat menyimpan preferensi provider AI.",
+      });
+    }
+  }
+
+  private async handlePersonalityCommand(
+    user: string,
+    jid: string,
+    sock: WebSocketInfo,
+    args: string[],
+  ): Promise<void> {
+    const requested = args[0]?.toLowerCase();
+
+    if (!requested || requested === "status") {
+      const userPreference = await this.getUserPersonalityPreference(user);
+      const activePersonality = userPreference || "nexa";
+
+      await sock.sendMessage(jid, {
+        text:
+          `*AI Personality Anda*\n\n` +
+          `• Personality aktif: ${activePersonality}\n` +
+          `• Preferensi pribadi: ${userPreference || "default (nexa)"}\n` +
+          `• Pilihan tersedia: ${AI_PERSONALITIES.join(", ")}\n\n` +
+          `Gunakan ${BotConfig.prefix}ai personality <${AI_PERSONALITIES.join("|")}|default> untuk mengubah personality.`,
+      });
+      return;
+    }
+
+    try {
+      const preferenceService = await this.getUserPreferenceService();
+
+      if (requested === "default" || requested === "reset") {
+        await preferenceService.clearAIPersonalityPreference(user);
+
+        await sock.sendMessage(jid, {
+          text: "✅ Personality AI Anda direset ke default (nexa).",
+        });
+        return;
+      }
+
+      if (!AI_PERSONALITIES.includes(requested as AIPersonality)) {
+        await sock.sendMessage(jid, {
+          text:
+            `❌ Personality tidak valid: ${requested}\n` +
+            `Gunakan: ${BotConfig.prefix}ai personality <${AI_PERSONALITIES.join("|")}|default>`,
+        });
+        return;
+      }
+
+      await preferenceService.setAIPersonalityPreference(
+        user,
+        requested as AIPersonality,
+      );
+
+      await sock.sendMessage(jid, {
+        text: `✅ Personality AI Anda diset ke *${requested}*.`,
+      });
+    } catch (error) {
+      log.error("Failed to update user AI personality preference:", error);
+      await sock.sendMessage(jid, {
+        text: "Terjadi kesalahan saat menyimpan preferensi personality AI.",
       });
     }
   }
