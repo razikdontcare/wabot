@@ -875,17 +875,25 @@ export class StickerCommand extends CommandInterface {
       await fs.writeFile(inputPath, videoBuffer);
 
       // Build ffmpeg filter for sticker conversion
-      let vf = "fps=10"; // Set to 10 fps for smaller file size (reduced from 15)
+      // `format=rgba` keeps alpha in the filter graph so transparent frames render correctly.
+      const vfParts = ["fps=10", "format=rgba"]; // Set to 10 fps for smaller file size (reduced from 15)
 
       if (useCrop) {
         // Crop to center square and resize
-        vf +=
-          ",scale=512:512:force_original_aspect_ratio=increase,crop=512:512";
+        vfParts.push(
+          "scale=512:512:force_original_aspect_ratio=increase:flags=lanczos",
+          "crop=512:512",
+        );
       } else {
         // Fit within 512x512 with padding
-        vf +=
-          ",scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0.0";
+        vfParts.push(
+          "scale=512:512:force_original_aspect_ratio=decrease:flags=lanczos",
+          "pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+        );
       }
+
+      vfParts.push("setsar=1");
+      const vf = vfParts.join(",");
 
       // Convert video to animated WebP (max 10 seconds)
       // Optimized settings for smaller file size while maintaining acceptable quality
@@ -896,8 +904,12 @@ export class StickerCommand extends CommandInterface {
         "10", // Limit to 10 seconds
         "-vf",
         vf,
+        "-vsync",
+        "0", // Preserve source frame timing without duplicating frames.
         "-c:v",
-        "libwebp",
+        "libwebp_anim",
+        "-pix_fmt",
+        "yuva420p",
         "-lossless",
         "0",
         "-compression_level",
