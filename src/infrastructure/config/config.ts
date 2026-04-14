@@ -10,13 +10,13 @@ export type UserRole = "admin" | "moderator" | "vip";
 export type AIProviderPreference = "groq" | "google" | "auto";
 
 function resolveAIProviderPreference(): AIProviderPreference {
-  const raw = (process.env.AI_PROVIDER || "groq").toLowerCase();
+  const raw = (process.env.AI_PROVIDER || "google").toLowerCase();
 
   if (raw === "google" || raw === "auto" || raw === "groq") {
     return raw;
   }
 
-  return "groq";
+  return "google";
 }
 
 // Default configuration - sensitive data remains in environment variables
@@ -59,9 +59,9 @@ export const BotConfig = {
   aiProvider: resolveAIProviderPreference(), // groq | google | auto
   aiModelGroq:
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
-  aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemini-3-flash-preview",
+  aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-31b-it",
   aiMultimodalModelGoogle:
-    process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemini-3-flash-preview",
+    process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-31b-it",
 
   // Pesan respons
   messages: {

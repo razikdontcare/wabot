@@ -100,7 +100,11 @@ export class StickerCommand extends CommandInterface {
         mediaBuffer = stream ? Buffer.from(stream) : null;
       } else if (msg.message?.videoMessage) {
         mediaType = "video";
-        sourceExtension = "mp4";
+        sourceExtension =
+          msg.message.videoMessage.gifPlayback ||
+          msg.message.videoMessage.mimetype?.toLowerCase().includes("gif")
+            ? "gif"
+            : "mp4";
         const stream = await downloadMediaMessage(
           <WAMessage>msg,
           "buffer",
@@ -144,7 +148,11 @@ export class StickerCommand extends CommandInterface {
           mediaBuffer = stream ? Buffer.from(stream) : null;
         } else if (quoted.videoMessage) {
           mediaType = "video";
-          sourceExtension = "mp4";
+          sourceExtension =
+            quoted.videoMessage.gifPlayback ||
+            quoted.videoMessage.mimetype?.toLowerCase().includes("gif")
+              ? "gif"
+              : "mp4";
           const quotedMsg: proto.IWebMessageInfo = {
             key: {
               remoteJid: jid,
@@ -874,9 +882,17 @@ export class StickerCommand extends CommandInterface {
       // Write video to temp file
       await fs.writeFile(inputPath, videoBuffer);
 
-      // Build ffmpeg filter for sticker conversion
-      // `format=rgba` keeps alpha in the filter graph so transparent frames render correctly.
-      const vfParts = ["fps=10", "format=rgba"]; // Set to 10 fps for smaller file size (reduced from 15)
+      // Build ffmpeg filter for sticker conversion.
+      // GIF sources use a higher frame-rate and slight speed-up so fast motion feels closer to the original.
+      const isGifSource = safeExtension === "gif";
+      const targetFps = isGifSource ? 18 : 10;
+      const vfParts = ["format=rgba"];
+
+      if (isGifSource) {
+        vfParts.push("setpts=PTS/1.12");
+      }
+
+      vfParts.push(`fps=${targetFps}`);
 
       if (useCrop) {
         // Crop to center square and resize
