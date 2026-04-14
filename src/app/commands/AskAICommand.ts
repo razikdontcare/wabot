@@ -358,7 +358,7 @@ export class AskAICommand extends CommandInterface {
         model: route.model,
         system: base_prompt,
         messages,
-        temperature: 0.3,
+        temperature: 0.6,
         maxOutputTokens: 1024,
         providerOptions:
           route.provider === "google"
