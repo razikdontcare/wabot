@@ -73,11 +73,13 @@ function appendCommonPromptSections(
   // Add bot command access information
   result += `\n\n## Bot Command Access
 You have access to various bot commands through these tools:
+- \`knowledge_search(query, scope?, limit?)\` - Search internal knowledge base (Qdrant vector DB)
 - \`get_bot_commands(query?)\` - Get list of available bot commands (optionally filtered)
 - \`get_command_help(commandName)\` - Get detailed help for a specific command
 - \`execute_bot_command(commandName, args)\` - Execute a bot command safely
 
 **Command Usage Guidelines:**
+- Use \`knowledge_search()\` first when user asks things that may relate to prior bot memory or stored documents
 - Use \`get_bot_commands()\` when users ask about available features or "what can this bot do?"
 - Use \`get_command_help()\` when users need help with a specific command
 - Use \`execute_bot_command()\` when users want to perform actions like downloading, searching, or playing games

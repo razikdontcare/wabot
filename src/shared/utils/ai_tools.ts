@@ -4,9 +4,34 @@ import { CommandHandler } from "../../app/handlers/CommandHandler.js";
 import { WebSocketInfo } from "../types/types.js";
 import { proto } from "baileys";
 import { CommandInfo } from "../../app/handlers/CommandInterface.js";
+import {
+  AIKnowledgeVectorService,
+  type KnowledgeScope,
+  type KnowledgeSearchScope,
+} from "../../domain/services/AIKnowledgeVectorService.js";
+
 const tavilyClient = tavily({
   apiKey: BotConfig.tavilyApiKey,
 });
+const knowledgeVectorService = AIKnowledgeVectorService.getInstance();
+
+interface KnowledgeSearchParams {
+  query: string;
+  userId?: string;
+  groupId?: string;
+  scope?: KnowledgeSearchScope;
+  limit?: number;
+}
+
+interface KnowledgeUpsertParams {
+  text: string;
+  userId?: string;
+  groupId?: string;
+  scope?: KnowledgeScope;
+  sourceType?: string;
+  sourceId?: string;
+  metadata?: Record<string, string | number | boolean | null | undefined>;
+}
 
 // Global variable to store CommandHandler instance
 let commandHandlerInstance: CommandHandler | null = null;
@@ -192,6 +217,50 @@ export async function execute_bot_command(
   } catch (error) {
     log.error("Error executing bot command:", error);
     return `Error executing command '${commandName}': ${error instanceof Error ? error.message : "Unknown error"}`;
+  }
+}
+
+export async function knowledge_search(
+  params: KnowledgeSearchParams,
+): Promise<string> {
+  try {
+    if (!knowledgeVectorService.isConfigured()) {
+      return "Knowledge base belum dikonfigurasi.";
+    }
+
+    const results = await knowledgeVectorService.searchKnowledge(params);
+    if (results.length === 0) {
+      return "Tidak ada konteks relevan di knowledge base.";
+    }
+
+    const formatted = results
+      .map((item, index) => {
+        const score = item.score.toFixed(3);
+        const text =
+          item.text.length > 900 ? `${item.text.slice(0, 900)}...` : item.text;
+        return `${index + 1}. [score ${score}] ${text}`;
+      })
+      .join("\n\n");
+
+    return `Konteks dari knowledge base:\n${formatted}`;
+  } catch (error) {
+    log.error("Error searching knowledge base:", error);
+    return "Terjadi kesalahan saat mengambil konteks dari knowledge base.";
+  }
+}
+
+export async function upsert_knowledge(
+  params: KnowledgeUpsertParams,
+): Promise<number> {
+  try {
+    if (!knowledgeVectorService.isConfigured()) {
+      return 0;
+    }
+
+    return await knowledgeVectorService.upsertKnowledge(params);
+  } catch (error) {
+    log.error("Error storing knowledge base item:", error);
+    return 0;
   }
 }
 
