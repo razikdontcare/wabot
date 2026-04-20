@@ -1,10 +1,36 @@
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
-export type AIPersonality = "nexa" | "luna";
+// Get __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-export const AI_PERSONALITIES: readonly AIPersonality[] = ["nexa", "luna"];
+// Define path to the prompts directory
+const PROMPTS_DIR = join(__dirname, "../../app/commands/prompts");
+
+// Use simple string for fully dynamic personalities
+export type AIPersonality = string;
+
+// Dictionary mapping personality name -> filename
+export const PERSONALITY_PROMPT_FILES: Record<string, string> = {};
+
+// Array of valid personalities loaded
+export const AI_PERSONALITIES: string[] = [];
+
+// Auto-load personalities from file system
+try {
+  const files = readdirSync(PROMPTS_DIR);
+  for (const file of files) {
+    if (file.endsWith("-system-prompt.md")) {
+      const personalityKey = file.replace("-system-prompt.md", "");
+      PERSONALITY_PROMPT_FILES[personalityKey] = file;
+      AI_PERSONALITIES.push(personalityKey);
+    }
+  }
+} catch (error) {
+  console.error("Failed to load AI personality prompts from directory:", error);
+}
 
 interface PromptContext {
   groupContext?: string;
@@ -13,11 +39,6 @@ interface PromptContext {
 }
 
 const DEFAULT_AI_PERSONALITY: AIPersonality = "nexa";
-
-const PERSONALITY_PROMPT_FILES: Record<AIPersonality, string> = {
-  nexa: "nexa-system-prompt.md",
-  luna: "luna-system-prompt.md",
-};
 
 /**
  * Loads and parses a prompt template from a markdown file
@@ -30,16 +51,8 @@ export function loadPrompt(
   replacements?: Record<string, string>,
 ): string {
   try {
-    // Get the directory of the current module
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-
     // Construct path to the prompts directory
-    const promptPath = join(
-      __dirname,
-      "../../app/commands/prompts",
-      promptFileName,
-    );
+    const promptPath = join(PROMPTS_DIR, promptFileName);
 
     // Read the file
     let content = readFileSync(promptPath, "utf-8");
