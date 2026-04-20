@@ -142,11 +142,12 @@ export class AskAICommand extends CommandInterface {
     const userPushName = msg.pushName;
     const imageInput = await this.extractImageInput(msg, jid, sock);
 
-    if (
-      msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage &&
-      args.length === 0
-    ) {
-      const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+    if (msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+      const contextInfo = msg.message.extendedTextMessage.contextInfo;
+      const quoted = contextInfo.quotedMessage;
+      const participant = contextInfo.participant;
+      const isGroupChat = jid.endsWith("@g.us");
+
       if (quoted?.conversation) quotedText = quoted.conversation;
       else if (quoted?.extendedTextMessage?.text)
         quotedText = quoted.extendedTextMessage.text;
@@ -154,11 +155,28 @@ export class AskAICommand extends CommandInterface {
         quotedText = quoted.imageMessage.caption;
 
       if (quotedText) {
-        prompt =
-          'The user is replied to message:\n"' +
-          quotedText.trim() +
-          "\"\n\nThe user's question:\n" +
-          prompt;
+        let replyContext = "The user replied to a message";
+        if (isGroupChat && participant) {
+          const participantNumber = participant.split("@")[0];
+
+          // Cek apakah pesan yang di-reply adalah pesan dari bot sendiri
+          const botId = sock?.user?.id?.split(":")[0];
+          if (botId && participantNumber === botId) {
+            replyContext = "The user replied to YOUR message";
+          } else {
+            replyContext += ` by @${participantNumber}`;
+          }
+        }
+
+        if (prompt) {
+          prompt =
+            `${replyContext}:\n"` +
+            quotedText.trim() +
+            "\"\n\nThe user's question:\n" +
+            prompt;
+        } else {
+          prompt = `${replyContext}:\n"` + quotedText.trim() + '"';
+        }
       }
     }
 
