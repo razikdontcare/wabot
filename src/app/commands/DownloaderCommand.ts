@@ -46,8 +46,30 @@ export class DownloaderCommand extends CommandInterface {
       return;
     }
 
-    const downloadMode = args.includes("audio") ? "audio" : "video";
-    const sendAsDocument = args.includes("document");
+    let downloadMode: "audio" | "video" = "video";
+    let sendAsDocument = false;
+
+    const flags = args.map((a) => a.toLowerCase());
+    if (flags.some((a) => ["audio", "a", "-a", "--audio", "mp3"].includes(a)))
+      downloadMode = "audio";
+    if (flags.some((a) => ["video", "v", "-v", "--video", "mp4"].includes(a)))
+      downloadMode = "video";
+    if (
+      flags.some((a) =>
+        ["document", "doc", "d", "-d", "--doc", "--document"].includes(a),
+      )
+    )
+      sendAsDocument = true;
+
+    // Combined variations
+    if (flags.some((a) => ["ad", "da", "-ad", "-da"].includes(a))) {
+      downloadMode = "audio";
+      sendAsDocument = true;
+    }
+    if (flags.some((a) => ["vd", "dv", "-vd", "-dv"].includes(a))) {
+      downloadMode = "video";
+      sendAsDocument = true;
+    }
     log.info("Download mode set to:", downloadMode);
 
     // 2. Try to extract URL from args or quoted message
