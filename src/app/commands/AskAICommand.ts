@@ -410,6 +410,11 @@ export class AskAICommand extends CommandInterface {
           }),
           execute: async ({ commandName }) => get_command_help(commandName),
         }),
+        get_current_time: createTool({
+          description: "Get the current date and time",
+          inputSchema: z.object({}),
+          execute: async () => new Date().toString(),
+        }),
         ...(jid && sock && msg
           ? {
               execute_bot_command: createTool({
