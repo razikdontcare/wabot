@@ -9,10 +9,42 @@ import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { ReminderService } from "../../domain/services/ReminderService.js";
 import { getMongoClient } from "../../infrastructure/config/mongo.js";
+import { generateText, Output } from "ai";
+import { z } from "zod";
 import {
   formatIndonesianDate,
   parseIndonesianDate,
 } from "../../shared/utils/indonesianDateParser.js";
+import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
+
+const aiReminderExtractionSchema = z.object({
+  status: z.enum(["ok", "invalid"]),
+  message: z.string().optional(),
+  scheduledTimeIso: z.string().optional(),
+  reason: z.string().optional(),
+});
+
+type AIReminderParseResult =
+  | {
+      status: "ok";
+      parsedDate: Date;
+      message: string;
+    }
+  | {
+      status: "invalid";
+      reason?: string;
+    };
+
+type LegacyReminderParseResult =
+  | {
+      status: "ok";
+      parsedDate: Date;
+      message: string;
+    }
+  | {
+      status: "invalid";
+      userMessage?: string;
+    };
 
 export class RemindCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
@@ -53,6 +85,7 @@ export class RemindCommand extends CommandInterface {
   };
 
   private readonly MAX_REMINDERS_PER_USER = 20;
+  private providerRouter = AIProviderRouterService.getInstance();
 
   async handleCommand(
     args: string[],
@@ -126,60 +159,41 @@ export class RemindCommand extends CommandInterface {
       return;
     }
 
-    // Parse input: split time phrase and message so that message is NOT empty
-    // 1) Prefer explicit divider if provided: '|' or '-' as standalone token
+    // Parse input with AI first for better natural-language accuracy.
+    // Fall back to legacy parser if AI is unavailable or returns invalid output.
+    const rawInput = args.join(" ").trim();
     let parsedDate: Date | null = null;
     let message = "";
+    const aiParsed = await this.parseReminderInputWithAI(rawInput);
 
-    const dividerIdx = args.findIndex((t) => t === "|" || t === "-");
-    if (dividerIdx !== -1) {
-      const timePhrase = args.slice(0, dividerIdx).join(" ").trim();
-      message = args
-        .slice(dividerIdx + 1)
-        .join(" ")
-        .trim();
-
-      if (!timePhrase) {
-        await sock.sendMessage(jid, {
-          text: `${config.emoji.error} Bagian waktu sebelum pemisah kosong nih. Contoh: *${config.prefix}remind 2 jam lagi | tidur*`,
-        });
-        return;
-      }
-      if (!message) {
-        await sock.sendMessage(jid, {
-          text: `${config.emoji.error} Pesan setelah pemisah kosong. Contoh: *${config.prefix}remind besok pagi - meeting penting*`,
-        });
-        return;
-      }
-
-      const dt = parseIndonesianDate(timePhrase);
-      if (!dt) {
-        await sock.sendMessage(jid, {
-          text: `${config.emoji.error} Gak ngerti format waktunya: "${timePhrase}" 😕\nCoba contoh: *2 jam lagi*, *besok pagi*, *jumat sore*`,
-        });
-        return;
-      }
-      parsedDate = dt;
+    if (aiParsed.status === "ok") {
+      parsedDate = aiParsed.parsedDate;
+      message = aiParsed.message;
     } else {
-      // 2) Fallback: infer by scanning time phrase from left and ensuring remaining message
-      // Consider up to 6 tokens for time, but leave at least 1 token for message
-      const maxTimeTokens = Math.min(Math.max(args.length - 1, 1), 6);
-      for (let i = maxTimeTokens; i >= 1; i--) {
-        const timeTokens = args.slice(0, i).join(" ");
-        const candidateMessage = args.slice(i).join(" ").trim();
-        const testDate = parseIndonesianDate(timeTokens);
+      log.warn(
+        `[RemindCommand] AI parser fallback triggered: ${aiParsed.reason || "unknown reason"}`,
+      );
 
-        if (testDate && testDate > new Date() && candidateMessage.length > 0) {
-          parsedDate = testDate;
-          message = candidateMessage;
-          break;
-        }
+      const legacyParsed = this.parseReminderInputLegacy(args, config);
+      if (legacyParsed.status === "ok") {
+        parsedDate = legacyParsed.parsedDate;
+        message = legacyParsed.message;
+      } else if (legacyParsed.userMessage) {
+        await sock.sendMessage(jid, {
+          text: legacyParsed.userMessage,
+        });
+        return;
       }
     }
 
     if (!parsedDate) {
+      const aiDetail =
+        aiParsed.status === "invalid" && aiParsed.reason
+          ? `\n\nDetail AI parser: ${aiParsed.reason}`
+          : "";
+
       await sock.sendMessage(jid, {
-        text: `${config.emoji.error} Hmm, gak ngerti waktu yang kamu maksud nih 🤔\n\n*Contoh yang bener:*\n• besok pagi\n• 2 jam lagi\n• jumat sore\n• minggu depan\n• 30 menit lagi\n\nCoba lagi ya!`,
+        text: `${config.emoji.error} Hmm, gak ngerti waktu yang kamu maksud nih 🤔\n\n*Contoh yang bener:*\n• besok pagi\n• 2 jam lagi\n• jumat sore\n• minggu depan\n• 30 menit lagi\n\nCoba lagi ya!${aiDetail}`,
       });
       return;
     }
@@ -219,6 +233,181 @@ export class RemindCommand extends CommandInterface {
     log.info(
       `Reminder created: ${reminderId} for user ${user} at ${parsedDate}`,
     );
+  }
+
+  private async parseReminderInputWithAI(
+    rawInput: string,
+  ): Promise<AIReminderParseResult> {
+    try {
+      const route = this.providerRouter.getRoutedModel();
+      const nowWibIso = this.toWibIso8601(new Date());
+
+      log.debug(
+        `[RemindCommand] Parsing with AI provider=${route.provider}, model=${route.modelId}`,
+      );
+
+      const result = await generateText({
+        model: route.model,
+        output: Output.object({
+          schema: aiReminderExtractionSchema,
+          name: "reminder_extraction",
+          description:
+            "Ekstraksi waktu reminder dan pesan reminder dari input natural bahasa Indonesia.",
+        }),
+        system:
+          "Kamu adalah parser reminder bahasa Indonesia. " +
+          "Ekstrak waktu reminder dan pesan reminder dari input user. " +
+          "Aturan: " +
+          "1) status='ok' hanya jika waktu dan pesan sama-sama jelas. " +
+          "2) scheduledTimeIso wajib ISO-8601 lengkap dengan timezone +07:00 (WIB). " +
+          "3) Gunakan currentWib sebagai referensi waktu untuk frasa relatif. " +
+          "4) Jika ambigu, pilih waktu terdekat di masa depan. " +
+          "5) Jika user hanya memberi waktu tanpa pesan, status='invalid'. " +
+          "6) reason singkat dalam Bahasa Indonesia jika invalid.",
+        prompt:
+          `currentWib: ${nowWibIso}\n` +
+          `userInput: ${rawInput}\n\n` +
+          "Kembalikan hasil sesuai schema.",
+        temperature: 0,
+        maxOutputTokens: 220,
+        providerOptions:
+          route.provider === "google"
+            ? {
+                google: {
+                  thinkingConfig: {
+                    thinkingLevel: "minimal",
+                  },
+                },
+              }
+            : undefined,
+      });
+
+      const parsedOutput = result.output;
+
+      if (parsedOutput.status !== "ok") {
+        return {
+          status: "invalid",
+          reason: parsedOutput.reason || "Input reminder belum cukup jelas.",
+        };
+      }
+
+      const message = parsedOutput.message?.trim() || "";
+      const scheduledTimeIso = parsedOutput.scheduledTimeIso?.trim() || "";
+
+      if (!message) {
+        return {
+          status: "invalid",
+          reason: "Pesan reminder tidak ditemukan.",
+        };
+      }
+
+      if (!scheduledTimeIso) {
+        return {
+          status: "invalid",
+          reason: "Waktu reminder tidak ditemukan.",
+        };
+      }
+
+      const parsedDate = new Date(scheduledTimeIso);
+      if (Number.isNaN(parsedDate.getTime())) {
+        return {
+          status: "invalid",
+          reason: `Format waktu dari AI tidak valid: ${scheduledTimeIso}`,
+        };
+      }
+
+      return {
+        status: "ok",
+        parsedDate,
+        message,
+      };
+    } catch (error) {
+      log.error("AI reminder parser error:", error);
+      return {
+        status: "invalid",
+        reason: "AI parser sedang tidak tersedia.",
+      };
+    }
+  }
+
+  private parseReminderInputLegacy(
+    args: string[],
+    config: typeof BotConfig,
+  ): LegacyReminderParseResult {
+    let parsedDate: Date | null = null;
+    let message = "";
+
+    // Prefer explicit divider first: '|' or '-' as standalone token.
+    const dividerIdx = args.findIndex((t) => t === "|" || t === "-");
+    if (dividerIdx !== -1) {
+      const timePhrase = args.slice(0, dividerIdx).join(" ").trim();
+      message = args
+        .slice(dividerIdx + 1)
+        .join(" ")
+        .trim();
+
+      if (!timePhrase) {
+        return {
+          status: "invalid",
+          userMessage: `${config.emoji.error} Bagian waktu sebelum pemisah kosong nih. Contoh: *${config.prefix}remind 2 jam lagi | tidur*`,
+        };
+      }
+
+      if (!message) {
+        return {
+          status: "invalid",
+          userMessage: `${config.emoji.error} Pesan setelah pemisah kosong. Contoh: *${config.prefix}remind besok pagi - meeting penting*`,
+        };
+      }
+
+      const dt = parseIndonesianDate(timePhrase);
+      if (!dt) {
+        return {
+          status: "invalid",
+          userMessage: `${config.emoji.error} Gak ngerti format waktunya: "${timePhrase}" 😕\nCoba contoh: *2 jam lagi*, *besok pagi*, *jumat sore*`,
+        };
+      }
+
+      parsedDate = dt;
+    } else {
+      // Infer time phrase from left side while preserving at least 1 token for message.
+      const maxTimeTokens = Math.min(Math.max(args.length - 1, 1), 6);
+      for (let i = maxTimeTokens; i >= 1; i--) {
+        const timeTokens = args.slice(0, i).join(" ");
+        const candidateMessage = args.slice(i).join(" ").trim();
+        const testDate = parseIndonesianDate(timeTokens);
+
+        if (testDate && testDate > new Date() && candidateMessage.length > 0) {
+          parsedDate = testDate;
+          message = candidateMessage;
+          break;
+        }
+      }
+    }
+
+    if (!parsedDate) {
+      return {
+        status: "invalid",
+      };
+    }
+
+    return {
+      status: "ok",
+      parsedDate,
+      message: message.trim(),
+    };
+  }
+
+  private toWibIso8601(date: Date): string {
+    const wibDate = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    const year = wibDate.getUTCFullYear();
+    const month = String(wibDate.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(wibDate.getUTCDate()).padStart(2, "0");
+    const hours = String(wibDate.getUTCHours()).padStart(2, "0");
+    const minutes = String(wibDate.getUTCMinutes()).padStart(2, "0");
+    const seconds = String(wibDate.getUTCSeconds()).padStart(2, "0");
+
+    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}+07:00`;
   }
 
   /**
