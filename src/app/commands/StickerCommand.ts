@@ -18,6 +18,7 @@ import {
   createFetchClient,
   isFetchError,
 } from "../../shared/utils/fetchClient.js";
+import webpmux from "node-webpmux";
 
 export class StickerCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
@@ -78,7 +79,8 @@ export class StickerCommand extends CommandInterface {
 
     try {
       // Check for crop flag
-      const useCrop = args.includes("--crop") || args.includes("-c");
+      const useCrop =
+        args.includes("crop") || args.includes("c") || args.includes("kotak");
 
       let mediaBuffer: Buffer | null = null;
       let mediaType: "image" | "video" | null = null;
@@ -320,7 +322,11 @@ export class StickerCommand extends CommandInterface {
 
       // Send sticker
       await sock.sendMessage(jid, {
-        sticker: stickerBuffer,
+        sticker: await this.addExif(
+          stickerBuffer,
+          config.name || "Nexa AI",
+          msg.pushName || user.split("@")[0],
+        ),
       });
 
       log.info(`Sticker created for user ${user} in ${jid}`);
@@ -811,6 +817,42 @@ export class StickerCommand extends CommandInterface {
     }
 
     return normalized;
+  }
+
+  /**
+   * Add EXIF metadata to WebP buffer for WhatsApp Sticker packname and authorname.
+   */
+  private async addExif(
+    webpBuffer: Buffer,
+    packname: string,
+    author: string,
+  ): Promise<Buffer> {
+    try {
+      const img = new webpmux.Image();
+      await img.load(webpBuffer);
+
+      const json = {
+        "sticker-pack-id": "whatsapp-funbot",
+        "sticker-pack-name": packname,
+        "sticker-pack-publisher": author,
+        emojis: ["✨"],
+      };
+
+      const exifAttr = Buffer.from([
+        0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x57,
+        0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00,
+      ]);
+      const jsonBuf = Buffer.from(JSON.stringify(json), "utf-8");
+      const exif = Buffer.concat([exifAttr, jsonBuf]);
+      exif.writeUInt32LE(jsonBuf.length, 14);
+
+      img.exif = exif;
+
+      return await img.save(null);
+    } catch (error) {
+      log.warn("Failed to add EXIF to sticker:", error);
+      return webpBuffer; // Return original if failed
+    }
   }
 
   /**

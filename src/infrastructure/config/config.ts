@@ -32,7 +32,7 @@ export const BotConfig = {
   allowMentionPrefix: false, // Aktifkan untuk mengizinkan prefix mention (@bot command)
 
   // Pengaturan Umum
-  name: "MeoW",
+  name: "Nexa AI",
   maxSessions: 5, // Maksimal session per user
   sessionTimeout: 3600000, // Waktu timeout session dalam milidetik (1 jam)
   sessionName: "meowbot", // Nama session untuk penyimpanan (hindari spasi dan karakter khusus)
@@ -64,9 +64,9 @@ export const BotConfig = {
   aiProvider: resolveAIProviderPreference(), // groq | google | auto
   aiModelGroq:
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
-  aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-31b-it",
+  aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiMultimodalModelGoogle:
-    process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-31b-it",
+    process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiEmbeddingModelGoogle:
     process.env.AI_EMBEDDING_MODEL_GOOGLE || "gemini-embedding-2-preview",
   qdrantUrl: process.env.QDRANT_URL || "",

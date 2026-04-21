@@ -28,9 +28,9 @@ import { setCommandHandler } from "../../shared/utils/ai_tools.js";
 
 // Import the broadcast function
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let broadcastQRUpdate:
-  | ((type: "new_qr" | "connected" | "disconnected", data?: any) => void)
-  | null = null;
+let broadcastQRUpdate: // eslint-disable-next-line @typescript-eslint/no-explicit-any
+((type: "new_qr" | "connected" | "disconnected", data?: any) => void) | null =
+  null;
 
 // Dynamically import to avoid circular dependency
 import("../../api.js")
@@ -292,6 +292,7 @@ export class BotClient {
                   const pdfCmd = new PdfCommand();
                   await pdfCmd.handleAddImage(
                     this.sessionService,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     m as any,
                     baseUser,
                     baseJid,

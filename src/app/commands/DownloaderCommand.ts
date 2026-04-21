@@ -1,533 +1,388 @@
-import {proto} from 'baileys';
-import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
-import {BotConfig, getCurrentConfig, log} from '../../infrastructure/config/config.js';
-import {WebSocketInfo} from '../../shared/types/types.js';
-import {SessionService} from '../../domain/services/SessionService.js';
-import extractUrlsFromText from '../../shared/utils/extractUrlsFromText.js';
-import {mimeType} from 'mime-type/with-db';
-import {convertMp3ToOgg} from '../../shared/utils/ffmpeg.js';
-import {createFetchClient, FetchResponse, isFetchError} from '../../shared/utils/fetchClient.js';
-
-type Status = 'tunnel' | 'redirect' | 'error' | 'picker' | 'local-processing';
-
-type ResponseStatus<T extends Status, Extra = Record<string, never>> = { status: T } & Extra;
-
-type PickerObject = {
-    type: 'photo' | 'video' | 'gif';
-    url: string;
-    thumb?: string;
-};
-
-type ErrorContext = {
-    service?: string;
-    limit?: number;
-};
-
-type CobaltResponse =
-    | ResponseStatus<'tunnel' | 'redirect', { url: string; filename: string }>
-    | ResponseStatus<'picker', { audio?: string; audioFilename?: string; picker: PickerObject[] }>
-    | ResponseStatus<'error', { error: { code: string; context?: ErrorContext } }>
-    | ResponseStatus<'local-processing'>;
-
-type CobaltRequestBody = {
-    url: string;
-    audioBitrate?: '320' | '256' | '128' | '96' | '64' | '8';
-    audioFormat?: 'best' | 'mp3' | 'ogg' | 'wav' | 'opus';
-    downloadMode?: 'auto' | 'audio' | 'mute';
-    filenameStyle?: 'classic' | 'pretty' | 'basic' | 'nerdy';
-    videoQuality?: 'max' | '4320' | '2160' | '1440' | '1080' | '720' | '480' | '360' | '240' | '144';
-    disableMetadata?: boolean;
-    alwaysProxy?: boolean;
-    localProcessing?: 'disabled' | 'preferred' | 'forced';
-    subtitleLang?: string; // ISO 639-1 language code
-    youtubeVideoCodec?: 'h264' | 'av1' | 'vp9';
-    youtubeVideoContainer?: 'auto' | 'mp4' | 'webm' | 'mkv';
-    youtubeDubLang?: string; // ISO 639-1 language code
-    convertGif?: boolean;
-    allowH265?: boolean;
-    tiktokFullAudio?: boolean;
-    youtubeBetterAudio?: boolean;
-    youtubeHLS?: boolean;
-};
+import { proto, AnyMessageContent } from "baileys";
+import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
+import { BotConfig, log } from "../../infrastructure/config/config.js";
+import { WebSocketInfo } from "../../shared/types/types.js";
+import { SessionService } from "../../domain/services/SessionService.js";
+import { YtDlpWrapper } from "../../shared/utils/ytdlp.js";
+import extractUrlsFromText from "../../shared/utils/extractUrlsFromText.js";
 
 export class DownloaderCommand extends CommandInterface {
-    static commandInfo: CommandInfo = {
-        name: 'downloader',
-        aliases: ['dl', 'download'],
-        description: 'Download video atau gambar dari platform yang didukung.',
-        helpText: `*Penggunaan:*
-• ${BotConfig.prefix}downloader <url> — Download video atau gambar
-• reply pesan lain yang berisi URL dengan ${BotConfig.prefix}downloader
+  static commandInfo: CommandInfo = {
+    name: "downloader",
+    aliases: ["dl", "download", "yt", "youtube", "dla", "d", "ytdl"],
+    description:
+      "Download video or audio from YouTube, TikTok, Instagram, and other supported platforms.",
+    helpText: `*Usage:*
+• ${BotConfig.prefix}dl <url> — Download video or audio from YouTube, TikTok, IG, or other supported platforms.
+• reply pesan lain yang berisi URL dengan ${BotConfig.prefix}dl
 
-👑 *VIP Members:* No cooldown & unlimited downloads!
+*Example:*
+• ${BotConfig.prefix}dl https://vt.tiktok.com/ZSrG9QPK7/
+• ${BotConfig.prefix}dl https://www.youtube.com/watch?v=dQw4w9WgXcQ`,
+    category: "general",
+    commandClass: DownloaderCommand,
+    cooldown: 10000,
+    maxUses: 5,
+    vipBypassCooldown: true, // VIP users bypass cooldown
+  };
 
-*Contoh:*
-${BotConfig.prefix}downloader https://vt.tiktok.com/ZSrG9QPK7/`,
-        category: 'general',
-        commandClass: DownloaderCommand,
-        cooldown: 10000,
-        maxUses: 3,
-        vipBypassCooldown: true, // VIP users bypass cooldown
-    };
+  private ytdl = new YtDlpWrapper();
+  private readonly SEND_TIMEOUT = 300000; // 5 minutes timeout
+  private readonly MAX_FILE_SIZE_MB = 100;
 
-    private BASE_URL = 'http://cobalt:9000';
-    private client = createFetchClient({
-        baseURL: this.BASE_URL,
-        timeout: 15000,
-        headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'NexaBot/1.0.0',
-        },
-        validateStatus: (status) => status < 500,
-    });
+  async handleCommand(
+    args: string[],
+    jid: string,
+    user: string,
+    sock: WebSocketInfo,
+    sessionService: SessionService,
+    msg: proto.IWebMessageInfo,
+  ): Promise<void> {
+    // const _config = await getCurrentConfig();
+    if (args.length > 0 && args[0] === "help") {
+      await sock.sendMessage(jid, {
+        text: `Usage: ${DownloaderCommand.commandInfo.helpText}`,
+      });
+      return;
+    }
 
-    async handleCommand(
-        args: string[],
-        jid: string,
-        user: string,
-        sock: WebSocketInfo,
-        sessionService: SessionService,
-        msg: proto.IWebMessageInfo
-    ): Promise<void> {
-        const config = await getCurrentConfig();
-        // 1. Handle help and url subcommands first
-        if (args.length > 0 && args[0] === 'help') {
-            await sock.sendMessage(jid, {
-                text: `Penggunaan: ${DownloaderCommand.commandInfo.helpText}`,
-            });
-            return;
+    let downloadMode: "audio" | "video" = "video";
+    let sendAsDocument = false;
+
+    const flags = args.map((a) => a.toLowerCase());
+    if (flags.some((a) => ["audio", "a", "-a", "--audio", "mp3"].includes(a)))
+      downloadMode = "audio";
+    if (flags.some((a) => ["video", "v", "-v", "--video", "mp4"].includes(a)))
+      downloadMode = "video";
+    if (
+      flags.some((a) =>
+        ["document", "doc", "d", "-d", "--doc", "--document"].includes(a),
+      )
+    )
+      sendAsDocument = true;
+
+    // Combined variations
+    if (flags.some((a) => ["ad", "da", "-ad", "-da"].includes(a))) {
+      downloadMode = "audio";
+      sendAsDocument = true;
+    }
+    if (flags.some((a) => ["vd", "dv", "-vd", "-dv"].includes(a))) {
+      downloadMode = "video";
+      sendAsDocument = true;
+    }
+    log.info("Download mode set to:", downloadMode);
+
+    // 2. Try to extract URL from args or quoted message
+    let url = extractUrlsFromText(args.join(" "))[0] || null;
+    if (!url && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+      // Try to extract from quoted message text
+      const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+      let quotedText = "";
+      if (quoted?.conversation) quotedText = quoted.conversation;
+      else if (quoted?.extendedTextMessage?.text)
+        quotedText = quoted.extendedTextMessage.text;
+      else if (quoted?.imageMessage?.caption)
+        quotedText = quoted.imageMessage.caption;
+      if (quotedText) {
+        const urls = extractUrlsFromText(quotedText);
+        url = urls[0] || null;
+      }
+    }
+
+    const isTikTok = url ? this.isTikTokUrl(url) : false;
+
+    if (!url) {
+      await sock.sendMessage(jid, {
+        text: "Silakan masukkan URL yang valid atau balas pesan yang berisi URL.",
+      });
+      return;
+    }
+
+    try {
+      // Single yt-dlp process - gets info + downloads file in one go!
+      await sock.sendMessage(jid, {
+        text: "🔄 Memulai download...",
+      });
+
+      // Track progress for ETA updates
+      let lastProgressUpdate = 0;
+      const progressUpdateInterval = 10000; // Update every 10 seconds
+      let isFirstProgress = true;
+      let isUpdating = false; // Prevent race conditions
+
+      // Progress callback function
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const handleProgress = async (progress: any) => {
+        // Validate progress data
+        log.info("Download progress:", progress);
+        if (
+          !progress ||
+          typeof progress.percent !== "number" ||
+          typeof progress.speed !== "number"
+        ) {
+          log.warn("Invalid progress data received:", progress);
+          return;
         }
-        if (args.length > 0 && args[0] === 'url') {
-            try {
-                const supportedPlatformsRequest = await this.client.get('/');
-                const supportedPlatforms = supportedPlatformsRequest.data.cobalt.services;
+
+        const now = Date.now();
+        if (now - lastProgressUpdate > progressUpdateInterval && !isUpdating) {
+          isUpdating = true;
+          lastProgressUpdate = now;
+
+          try {
+            const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+
+            if (isFirstProgress) {
+              // First progress update: show full details
+              // Validate totalBytes and eta exist
+              if (
+                progress.totalBytes &&
+                typeof progress.totalBytes === "number"
+              ) {
+                const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+                const eta = progress.eta || 0;
+                const etaMinutes = Math.floor(eta / 60);
+                const etaSeconds = eta % 60;
+                const etaText =
+                  etaMinutes > 0
+                    ? `${etaMinutes}m ${etaSeconds}s`
+                    : `${etaSeconds}s`;
 
                 await sock.sendMessage(jid, {
-                    text: `🌐 Platform yang didukung:\n${supportedPlatforms.join(', ')}`,
+                  text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 Size: ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
                 });
-            } catch (error) {
-                log.error('Failed to fetch supported platforms:', error);
+                isFirstProgress = false;
+              } else {
+                // Fallback if totalBytes is missing
                 await sock.sendMessage(jid, {
-                    text: '❌ Duh, gabisa ambil list platform yang didukung. Coba lagi aja ya bestie! 😅',
+                  text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n⚡ Speed: ${speedMBps} MB/s`,
                 });
-            }
-            return;
-        }
-
-        if (!config.disableWarning) {
-            await sock.sendMessage(jid, {
-                text: `*Info:* Platform YouTube dengan command ini sedang bermasalah, gunakan alternatif "${BotConfig.prefix}dla" untuk mengunduh video/audio YouTube.`,
-            });
-        }
-
-        const downloadMode = args.includes('audio') ? 'audio' : args.includes('mute') ? 'mute' : 'auto';
-        log.info('Download mode set to:', downloadMode);
-
-        // 2. Try to extract URL from args or quoted message
-        let url: string | null = null;
-
-        try {
-            const urlsFromArgs = extractUrlsFromText(args.join(' '));
-            url = urlsFromArgs.length > 0 ? urlsFromArgs[0] : null;
-        } catch (error) {
-            log.error('Failed to extract URL from args:', error);
-        }
-
-        if (!url && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-            try {
-                // Try to extract from quoted message text
-                const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
-                let quotedText = '';
-                if (quoted?.conversation) quotedText = quoted.conversation;
-                else if (quoted?.extendedTextMessage?.text) quotedText = quoted.extendedTextMessage.text;
-                else if (quoted?.imageMessage?.caption) quotedText = quoted.imageMessage.caption;
-
-                if (quotedText) {
-                    const urls = extractUrlsFromText(quotedText);
-                    url = urls.length > 0 ? urls[0] : null;
-                }
-            } catch (error) {
-                log.error('Failed to extract URL from quoted message:', error);
-            }
-        }
-
-        if (!url) {
-            await sock.sendMessage(jid, {
-                text: `💔 Eh mana URL-nya? Gak ada yang bisa didownload nih!\n\n*How to use:*\n• ${BotConfig.prefix}downloader <url> — Paste link kamu di sini\n• Reply pesan yang ada link-nya pakai ${BotConfig.prefix}downloader\n\nBingung platform mana aja? Ketik ${BotConfig.prefix}downloader url buat liat list-nya! ✨`,
-            });
-            return;
-        }
-
-        // 4. Download and send media
-        log.info('Downloading media from URL:', url);
-
-        try {
-            const mediaResponse = await this.getMediaURL(url, downloadMode);
-
-            if (mediaResponse instanceof Error) {
-                log.error('Error downloading media:', mediaResponse.message);
-                await sock.sendMessage(jid, {
-                    text: `❌ ${mediaResponse.message}`,
-                });
-                return;
-            }
-
-            if (Array.isArray(mediaResponse)) {
-                // If multiple media URLs are returned, send them all
-                const mediaCount = mediaResponse.length;
-                await sock.sendMessage(jid, {
-                    text: `📁 Ketemu ${mediaCount} media nih! Ngirim sekarang... 🚀`,
-                });
-
-                let successCount = 0;
-                for (const singleUrl of mediaResponse) {
-                    try {
-                        if (singleUrl.type === 'photo') {
-                            await sock.sendMessage(jid, {
-                                image: {url: singleUrl.url},
-                            });
-                        } else if (singleUrl.type === 'video') {
-                            await sock.sendMessage(jid, {
-                                video: {url: singleUrl.url},
-                            });
-                        } else if (singleUrl.type === 'gif') {
-                            await sock.sendMessage(jid, {
-                                video: {url: singleUrl.url},
-                            });
-                        }
-                        successCount++;
-                        log.info('Media sent:', singleUrl.url);
-                    } catch (sendError) {
-                        log.error('Failed to send media:', singleUrl.url, sendError);
-                        // Continue with other media even if one fails
-                    }
-                }
-
-                if (successCount === 0) {
-                    await sock.sendMessage(jid, {
-                        text: '💀 Waduh, semua media gagal dikirim. Ada error nih, coba lagi nanti ya!',
-                    });
-                } else if (successCount < mediaCount) {
-                    await sock.sendMessage(jid, {
-                        text: `🤔 Hmm, cuma berhasil kirim ${successCount} dari ${mediaCount} media. Yang lain ada kendala kayaknya~`,
-                    });
-                }
+                isFirstProgress = false;
+              }
             } else {
-                // If a single media URL is returned, send it directly
-                const mediaType = this.getMediaType(mediaResponse.filename);
-
-                try {
-                    if (mediaType === 'image') {
-                        await sock.sendMessage(jid, {
-                            image: {url: mediaResponse.url},
-                        });
-                    } else if (mediaType === 'video') {
-                        await sock.sendMessage(jid, {
-                            video: {url: mediaResponse.url},
-                        });
-                    } else if (mediaType === 'gif') {
-                        await sock.sendMessage(jid, {
-                            video: {url: mediaResponse.url},
-                        });
-                    } else if (mediaType === 'audio') {
-                        try {
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-                            const resp = await fetch(mediaResponse.url, {
-                                signal: controller.signal,
-                            });
-
-                            clearTimeout(timeoutId);
-
-                            if (!resp.ok) {
-                                throw new Error(`HTTP ${resp.status}`);
-                            }
-
-                            const arrayBuffer = await resp.arrayBuffer();
-
-                            // Check buffer size before processing (50MB limit)
-                            if (arrayBuffer.byteLength > 50 * 1024 * 1024) {
-                                throw new Error('Audio file too large');
-                            }
-
-                            const audioBuffer = Buffer.from(arrayBuffer);
-
-                            // Convert MP3 to OGG if needed
-                            const oggBuffer = await convertMp3ToOgg(audioBuffer);
-
-                            await sock.sendMessage(jid, {
-                                audio: oggBuffer,
-                                mimetype: 'audio/mp4',
-                                ptt: false,
-                            });
-
-                            await sock.sendMessage(jid, {
-                                text: `🎵 Audio udah sampe! Gw convert ke OGG biar WA-nya happy~\n\nKalo mau format asli ya langsung aja: ${mediaResponse.url}`,
-                            });
-                        } catch (audioError) {
-                            log.error('Failed to process audio:', audioError);
-                            await sock.sendMessage(jid, {
-                                text: `💔 Yah, audio-nya error pas diproses. Langsung download aja ya: ${mediaResponse.url}`,
-                            });
-                        }
-                    } else {
-                        await sock.sendMessage(jid, {
-                            text: `🙄 Media type-nya gak support buat dikirim otomatis.\n\nYa udah, download manual aja: ${mediaResponse.url}`,
-                        });
-                        return;
-                    }
-                } catch (sendError) {
-                    log.error('Failed to send media:', sendError);
-                    await sock.sendMessage(jid, {
-                        text: `😔 Yah gabisa kirim media-nya. Tapi tenang, direct link-nya ada kok: ${mediaResponse.url}`,
-                    });
-                    return;
-                }
+              // Subsequent updates: simplified progress
+              await sock.sendMessage(jid, {
+                text: `📥 Progress: ${progress.percent.toFixed(1)}% | ⚡ ${speedMBps} MB/s`,
+              });
             }
+          } catch (error) {
+            log.error("Failed to send progress message:", error);
+          } finally {
+            isUpdating = false;
+          }
+        }
+      };
 
-            log.info('Media download completed for URL:', url);
-        } catch (unexpectedError) {
-            log.error('Unexpected error in handleCommand:', unexpectedError);
-            await sock.sendMessage(jid, {
-                text: '💀 Yah ada error yang aneh nih. Coba lagi aja nanti ya bestie! 🥺',
+      // Use optimized download with all speed enhancements and progress tracking
+      // This now uses a SINGLE yt-dlp process that fetches metadata and downloads
+      const response =
+        downloadMode === "audio"
+          ? await this.ytdl.downloadToBuffer(url, {
+              audioOnly: true,
+              useAria2c: false,
+              concurrentFragments: 5,
+              proxy: isTikTok ? process.env.PROXY : undefined,
+              onProgress: handleProgress,
+            })
+          : await this.ytdl.downloadToBuffer(url, {
+              useAria2c: false,
+              concurrentFragments: 5,
+              proxy: isTikTok ? process.env.PROXY : undefined,
+              onProgress: handleProgress,
             });
-        }
-    }
 
-    getMediaType(filename: string): 'image' | 'video' | 'gif' | 'audio' | 'unknown' {
-        const mime = mimeType.lookup(filename);
-        if (!mime) return 'unknown';
+      // Extract metadata from response
+      const videoInfo = response.metadata;
+      const durationText = this.formatDuration(videoInfo?.duration || 0);
+      const title = videoInfo?.title || "Unknown";
 
-        const mimeString = Array.isArray(mime) ? mime[0] : mime;
-        if (mimeString === 'image/gif') return 'gif'; // Check GIF first before general image check
-        if (mimeString.startsWith('image/')) return 'image';
-        if (mimeString.startsWith('video/')) return 'video';
-        if (mimeString.startsWith('audio/')) return 'audio';
+      await sock.sendMessage(jid, {
+        text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
+      });
 
-        return 'unknown';
-    }
+      if (!response) {
+        await sock.sendMessage(jid, {
+          text: "Gagal mengunduh media. Silakan coba lagi.",
+        });
+        return;
+      }
 
-    async getMediaURL(
-        url: string,
-        downloadMode: 'auto' | 'audio' | 'mute' = 'auto'
-    ): Promise<{ url: string; filename: string } | PickerObject[] | Error> {
+      // Check file size
+      const fileSizeMB = response.buffer.length / (1024 * 1024);
+      if (fileSizeMB > this.MAX_FILE_SIZE_MB) {
+        await sock.sendMessage(jid, {
+          text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal ${this.MAX_FILE_SIZE_MB}MB.`,
+        });
+        return;
+      }
+
+      await sock.sendMessage(jid, {
+        text: `📤 Mengirim ${downloadMode} (${fileSizeMB.toFixed(1)}MB)...`,
+      });
+
+      if (downloadMode === "audio") {
         try {
-            // Validate URL format
-            if (!url || url.trim().length === 0) {
-                return new Error('Heh, URL-nya mana? Kosong gini gimana mau download 🤨');
-            }
-
-            // Basic URL validation
-            try {
-                new URL(url);
-            } catch {
-                return new Error('URL-nya aneh deh, formatnya salah. Paste yang bener dong! 😅');
-            }
-
-            // Prepare request body according to API specification
-            const requestBody: CobaltRequestBody = {
-                url: url.trim(),
-                downloadMode,
-                audioFormat: 'mp3', // Set default audio format
-                videoQuality: '1080', // Set default video quality
-                filenameStyle: 'basic', // Set default filename style
-            };
-
-            const endpoint = `${this.BASE_URL}/`;
-            const response = await this.makeRequestWithRetry(requestBody, 2, endpoint);
-
-            // Handle error responses with detailed error messages
-            if (response.data.status === 'error') {
-                const errorData = response.data as ResponseStatus<
-                    'error',
-                    {
-                        error: { code: string; context?: ErrorContext };
-                    }
-                >;
-                const errorCode = errorData.error.code;
-                const context = errorData.error.context;
-
-                log.error('Cobalt API error:', {code: errorCode, context});
-
-                // Return user-friendly error messages based on error codes
-                switch (errorCode) {
-                    case 'error.api.fetch.empty':
-                        return new Error('Duh, gak ada konten apapun di URL itu. Coba link yang lain! 😕');
-                    case 'error.api.link.unsupported': {
-                        const service = context?.service
-                            ? ` Link ${context.service} yang kamu kasih gak didukung nih. Make sure link-nya valid ya bestie! 🤷‍♀️`
-                            : '';
-                        return new Error(`Yah URL-nya gak support.${service}`);
-                    }
-                    case 'error.api.link.invalid':
-                        return new Error('Link-nya invalid bestie. Double check lagi dong! 🔍');
-                    default: {
-                        // For all other error codes, provide a general error message
-                        // with the error code for debugging purposes
-                        const contextInfo = context?.service
-                            ? ` (Platform: ${context.service})`
-                            : context?.limit
-                                ? ` (Limit: ${context.limit})`
-                                : '';
-                        return new Error(`Waduh gagal download media-nya${contextInfo}. Coba lagi aja nanti! 🥺`);
-                    }
-                }
-            }
-
-            // Handle local processing (not supported in this implementation)
-            if (response.data.status === 'local-processing') {
-                log.warn('Local processing required but not supported:', response.data);
-                return new Error('Oof, konten ini butuh processing khusus yang belum disupport. Coba link lain ya! 😅');
-            }
-
-            // Handle picker response
-            if (response.data.status === 'picker') {
-                log.info('Picker response received, media options available.');
-                const pickerData = response.data as ResponseStatus<
-                    'picker',
-                    { audio?: string; audioFilename?: string; picker: PickerObject[] }
-                >;
-                const picker = pickerData.picker;
-
-                if (!picker || picker.length === 0) {
-                    return new Error('Gak ada opsi media yang bisa diambil dari URL ini. Sad 😢');
-                }
-
-                // Return URLs of all available media
-                return picker;
-            }
-
-            // Handle successful tunnel/redirect responses
-            if (response.data.status === 'tunnel' || response.data.status === 'redirect') {
-                const mediaData = response.data as ResponseStatus<
-                    'tunnel' | 'redirect',
-                    {
-                        url: string;
-                        filename: string;
-                    }
-                >;
-
-                if (!mediaData.url) {
-                    return new Error('Eh, server gak kasih link media-nya. Aneh banget! 🤔');
-                }
-
-                return {
-                    url: mediaData.url,
-                    filename: mediaData.filename || 'downloaded_media',
-                };
-            }
-
-            // Handle unexpected status
-            log.error('Unexpected response status:', response.data.status);
-            return new Error(`Server response-nya aneh: ${response.data.status}. Something's not right 🤨`);
+          if (sendAsDocument) {
+            await this.sendWithTimeout(sock, jid, {
+              document: response.buffer,
+              mimetype: "audio/mp3",
+              fileName: this.normalizeFilename(title) + ".mp3",
+            });
+          } else {
+            await this.sendWithTimeout(sock, jid, {
+              audio: response.buffer,
+              mimetype: "audio/mp4",
+              fileName: this.normalizeFilename(title) + ".mp3",
+            });
+          }
         } catch (error) {
-            log.error('Error downloading media:', error);
-
-            // Handle specific fetch errors
-            if (isFetchError(error)) {
-                if (error.code === 'ECONNABORTED') {
-                    return new Error('Yah, server lama banget responnya. Timeout deh! Coba lagi nanti ya 😴');
-                }
-                if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-                    return new Error('Gabisa connect ke server download. Ada masalah nih, kontak admin dong! 📞');
-                }
-                if (error.response?.status === 429) {
-                    return new Error('Waduh, terlalu banyak request! Slow down bestie 🐌');
-                }
-                if (error.response?.status === 503) {
-                    return new Error('Server-nya lagi down. Coba lagi nanti ya! 🔧');
-                }
-                if (error.response && error.response.status >= 500) {
-                    return new Error('Server error nih. Admin-nya pasti lagi pusing! Coba lagi nanti 🤕');
-                }
-                if (error.response?.status === 400) {
-                    return new Error('Request-nya invalid. Cek lagi URL yang kamu masukin! 🔍');
-                }
-                if (error.response?.status === 404) {
-                    return new Error('Endpoint gak ketemu. Sepertinya ada config yang salah. Hit up admin! 🚨');
-                }
-
-                return new Error(
-                    `HTTP error ${error.response?.status || 'unknown'}: ${error.message} - Something went wrong bestie! 😵`
-                );
-            }
-
-            // Handle other types of errors
-            if (error instanceof Error) {
-                return new Error(`Network error: ${error.message} - Internet lagi lemot? 🐌`);
-            }
-
-            return new Error('Ada error yang gak jelas nih pas download media. Mystery error! 👻');
+          log.error("Failed to send audio:", error);
+          await sock.sendMessage(jid, {
+            text: "Gagal mengirim audio. File mungkin terlalu besar atau koneksi timeout.",
+          });
         }
-    }
-
-    private async makeRequestWithRetry(
-        requestBody: CobaltRequestBody,
-        maxRetries: number = 2,
-        endpoint?: string
-    ): Promise<FetchResponse<CobaltResponse>> {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let lastError: any;
-
-        for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-            try {
-                const targetUrl = endpoint ? endpoint : `${this.BASE_URL}/`;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-                const response = await fetch(targetUrl, {
-                    method: 'POST',
-                    headers: {
-                        Accept: 'application/json',
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'WhatsApp-FunBot/1.0.0',
-                    },
-                    body: JSON.stringify(requestBody),
-                    signal: controller.signal,
-                });
-
-                clearTimeout(timeoutId);
-
-                const data = await response.json();
-
-                return {
-                    data,
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: response.headers,
-                } as FetchResponse<CobaltResponse>;
-            } catch (error) {
-                lastError = error;
-
-                // Don't retry on client errors (4xx) or specific server errors
-                if (isFetchError(error)) {
-                    const status = error.response?.status;
-                    if (status && (status < 500 || status === 503)) {
-                        // Don't retry on 4xx errors or 503 (service unavailable)
-                        throw error;
-                    }
-                }
-
-                // Wait before retrying (exponential backoff)
-                if (attempt <= maxRetries) {
-                    const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s...
-                    log.info(`Request failed, retrying in ${delay}ms (attempt ${attempt}/${maxRetries + 1})`);
-                    await new Promise((resolve) => setTimeout(resolve, delay));
-                }
-            }
-        }
-
-        throw lastError;
-    }
-
-    private isTikTokUrl(input: string): boolean {
+        return;
+      } else {
         try {
-            const hostname = new URL(input).hostname.toLowerCase();
-            return hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com') || hostname.includes('tiktok.com');
-        } catch {
-            return false;
+          // Send a status message for large videos
+          if (response.buffer.length > 50 * 1024 * 1024) {
+            // 50MB
+            await sock.sendMessage(jid, {
+              text: "Mengirim video besar, mohon tunggu maksimal 5 menit.",
+            });
+          }
+
+          if (sendAsDocument) {
+            await this.sendWithTimeout(sock, jid, {
+              document: response.buffer,
+              mimetype: "video/mp4",
+              fileName: this.normalizeFilename(title) + ".mp4",
+            });
+          } else {
+            await this.sendWithTimeout(sock, jid, {
+              video: response.buffer,
+              mimetype: "video/mp4",
+              fileName: this.normalizeFilename(title) + ".mp4",
+            });
+          }
+        } catch (error) {
+          log.error("Failed to send video:", error);
+          if (error instanceof Error && error.message.includes("timeout")) {
+            await sock.sendMessage(jid, {
+              text: "Timeout saat mengirim video. File mungkin terlalu besar.",
+            });
+          } else {
+            await sock.sendMessage(jid, {
+              text: "Gagal mengirim video. File mungkin terlalu besar atau terjadi kesalahan.",
+            });
+          }
         }
+        return;
+      }
+    } catch (error) {
+      log.error("Download failed:", error);
+      await this.handleDownloadError(error, sock, jid);
+      return;
     }
+  }
+
+  private async sendWithTimeout(
+    sock: WebSocketInfo,
+    jid: string,
+    message: AnyMessageContent,
+    timeoutMs: number = this.SEND_TIMEOUT,
+  ): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Send timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      sock
+        .sendMessage(jid, message)
+        .then(() => {
+          clearTimeout(timeout);
+          resolve(true);
+        })
+        .catch((error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+    });
+  }
+
+  private normalizeFilename(text: string): string {
+    return text
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  private formatDuration(seconds: number): string {
+    if (seconds === 0) return "Unknown";
+
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    const parts: string[] = [];
+
+    if (hours > 0) {
+      parts.push(`${hours} jam`);
+    }
+    if (minutes > 0) {
+      parts.push(`${minutes} menit`);
+    }
+    if (secs > 0 || parts.length === 0) {
+      parts.push(`${secs} detik`);
+    }
+
+    return parts.join(" ");
+  }
+
+  private isTikTokUrl(input: string): boolean {
+    try {
+      const hostname = new URL(input).hostname.toLowerCase();
+      return (
+        hostname === "tiktok.com" ||
+        hostname.endsWith(".tiktok.com") ||
+        hostname.includes("tiktok.com")
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async handleDownloadError(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    error: any,
+    sock: WebSocketInfo,
+    jid: string,
+  ): Promise<void> {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    if (errorMessage.includes("timeout")) {
+      await sock.sendMessage(jid, {
+        text: "⏰ Timeout saat mengunduh. Coba lagi atau gunakan URL yang berbeda.",
+      });
+    } else if (errorMessage.includes("too long")) {
+      await sock.sendMessage(jid, {
+        text: `⏱️ ${errorMessage}`,
+      });
+    } else if (errorMessage.includes("Live streams")) {
+      await sock.sendMessage(jid, {
+        text: "📺 Live stream tidak didukung. Gunakan video yang sudah selesai.",
+      });
+    } else if (errorMessage.includes("Private video")) {
+      await sock.sendMessage(jid, {
+        text: "🔒 Video private tidak dapat diunduh.",
+      });
+    } else {
+      await sock.sendMessage(jid, {
+        text: "❌ Gagal mengunduh media. Periksa URL dan coba lagi.",
+      });
+    }
+  }
 }
