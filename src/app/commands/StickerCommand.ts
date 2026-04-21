@@ -78,7 +78,8 @@ export class StickerCommand extends CommandInterface {
 
     try {
       // Check for crop flag
-      const useCrop = args.includes("--crop") || args.includes("-c");
+      const useCrop =
+        args.includes("crop") || args.includes("c") || args.includes("kotak");
 
       let mediaBuffer: Buffer | null = null;
       let mediaType: "image" | "video" | null = null;
