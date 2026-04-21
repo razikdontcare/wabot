@@ -32,7 +32,7 @@ export const BotConfig = {
   allowMentionPrefix: false, // Aktifkan untuk mengizinkan prefix mention (@bot command)
 
   // Pengaturan Umum
-  name: "MeoW",
+  name: "Nexa AI",
   maxSessions: 5, // Maksimal session per user
   sessionTimeout: 3600000, // Waktu timeout session dalam milidetik (1 jam)
   sessionName: "meowbot", // Nama session untuk penyimpanan (hindari spasi dan karakter khusus)
