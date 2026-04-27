@@ -30,6 +30,15 @@ import {
   web_search,
 } from "../../shared/utils/ai_tools.js";
 import {
+  delete_file,
+  exec_command,
+  list_files,
+  read_file,
+  update_memory,
+  web_fetch,
+  write_file,
+} from "../../shared/utils/ai_agent_tools.js";
+import {
   AI_PERSONALITIES,
   loadPersonalityPrompt,
   type AIPersonality,
@@ -415,24 +424,85 @@ export class AskAICommand extends CommandInterface {
           inputSchema: z.object({}),
           execute: async () => new Date().toString(),
         }),
+        list_files: createTool({
+          description: "List files in a directory",
+          inputSchema: z.object({
+            path: z.string().optional().default("."),
+          }),
+          execute: async ({ path }) => list_files(path),
+        }),
+        read_file: createTool({
+          description: "Read the content of a file",
+          inputSchema: z.object({
+            path: z.string(),
+          }),
+          execute: async ({ path }) => read_file(path),
+        }),
+        write_file: createTool({
+          description: "Write content to a file (overwrites if exists)",
+          inputSchema: z.object({
+            path: z.string(),
+            content: z.string(),
+          }),
+          execute: async ({ path, content }) => write_file(path, content),
+        }),
+        delete_file: createTool({
+          description: "Delete a file",
+          inputSchema: z.object({
+            path: z.string(),
+          }),
+          execute: async ({ path }) => delete_file(path),
+        }),
+        update_memory: createTool({
+          description: "Update persistent memory in MEMORY.md",
+          inputSchema: z.object({
+            content: z.string(),
+            mode: z.enum(["append", "overwrite"]).optional().default("append"),
+          }),
+          execute: async ({ content, mode }) => update_memory(content, mode),
+        }),
+        exec_command: createTool({
+          description: "Execute a shell command in the bot's workspace",
+          inputSchema: z.object({
+            command: z.string(),
+          }),
+          execute: async ({ command }) => exec_command(command),
+        }),
+        web_fetch: createTool({
+          description: "Fetch content from a URL",
+          inputSchema: z.object({
+            url: z.string().url(),
+            options: z
+              .object({
+                method: z.string().optional(),
+                headers: z.record(z.string(), z.string()).optional(),
+                body: z.string().optional(),
+                timeout: z.number().optional(),
+                allowList: z.array(z.string()).optional(),
+                blockList: z.array(z.string()).optional(),
+              })
+              .optional(),
+          }),
+          execute: async ({ url, options }) => web_fetch(url, options),
+        }),
         ...(jid && sock && msg
           ? {
-              execute_bot_command: createTool({
-                description:
-                  "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
-                inputSchema: z.object({
-                  commandName: z.string().min(1),
-                  args: z.array(z.string()),
-                }),
-                execute: async ({ commandName, args }) =>
-                  execute_bot_command(commandName, args, {
-                    jid: jid!,
-                    user,
-                    sock: sock!,
-                    msg: msg!,
-                  }),
+            execute_bot_command: createTool({
+              description:
+                "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
+              inputSchema: z.object({
+                commandName: z.string().min(1),
+                args: z.array(z.string()),
               }),
-            }
+              execute: async ({ commandName, args }) =>
+                execute_bot_command(commandName, args, {
+                  jid: jid!,
+                  user,
+                  sock: sock!,
+                  msg: msg!,
+                }),
+            }),
+          }
           : {}),
       };
 
@@ -444,12 +514,12 @@ export class AskAICommand extends CommandInterface {
         providerOptions:
           route.provider === "google"
             ? {
-                google: {
-                  thinkingConfig: {
-                    thinkingLevel: "minimal",
-                  },
+              google: {
+                thinkingConfig: {
+                  thinkingLevel: "minimal",
                 },
-              }
+              },
+            }
             : undefined,
         stopWhen: stepCountIs(5),
         tools: aiTools,

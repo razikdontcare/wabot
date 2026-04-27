@@ -91,6 +91,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/shared/logger/logger.ts` | Custom logging with buffer and redaction | `Logger`, `logBuffer` | #shared | #utils |
 | `src/shared/types/types.ts` | Common TypeScript types | `Session`, `WebSocketInfo` | #shared | #types |
 | `src/shared/utils/ai_tools.ts` | Helper tools for AI interactions | `setCommandHandler` | #shared | #ai |
+| `src/shared/utils/ai_agent_tools.ts` | Filesystem, execution and web tools for AI agents | `list_files`, `read_file`, `write_file`, `delete_file`, `update_memory`, `exec_command`, `web_fetch` (advanced) | #shared | #ai |
 | `src/shared/utils/ytdlp.ts` | YouTube download utility | `ytdlp` | #shared | #utils |
 
 ## API Surface
@@ -132,3 +133,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 
 ## Changelog
 - **2026-04-28**: Initial map generated from full codebase scan (agent/initial-scan).
+- **2026-04-28**: Added AI agent tools (filesystem, persistent memory) and integrated into AskAICommand.
+- **2026-04-28**: Expanded agent tools with `exec_command` and `web_fetch` for full autonomy.
