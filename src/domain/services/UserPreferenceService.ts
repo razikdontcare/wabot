@@ -14,6 +14,8 @@ export interface UserPreference {
   customAliases?: Record<string, string>;
   aiProviderPreference?: AIProviderPreference;
   aiPersonalityPreference?: AIPersonality;
+  stickerAuthor?: string;
+  stickerPack?: string;
 }
 
 export class UserPreferenceService {

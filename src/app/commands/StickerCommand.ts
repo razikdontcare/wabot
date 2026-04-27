@@ -5,6 +5,9 @@ import {
   getCurrentConfig,
   log,
 } from "../../infrastructure/config/config.js";
+import { getMongoClient } from "../../infrastructure/config/mongo.js";
+import { VIPService } from "../../domain/services/VIPService.js";
+import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import sharp from "sharp";
@@ -48,7 +51,11 @@ export class StickerCommand extends CommandInterface {
 • Cari di Tenor: *${BotConfig.prefix}s tenor kucing lucu*
 • Crop mode: *${BotConfig.prefix}s --crop*
 
-👑 *VIP Members:* No cooldown!`,
+👑 *VIP Members:* 
+• No cooldown!
+• Ganti nama pack: *${BotConfig.prefix}s pack <Nama Pack>*
+• Ganti nama author: *${BotConfig.prefix}s author <Nama Author>*
+(Otomatis tersimpan buat sticker selanjutnya)`,
     category: "utility",
     commandClass: StickerCommand,
     cooldown: 5000,
@@ -67,6 +74,20 @@ export class StickerCommand extends CommandInterface {
     },
   });
 
+  private userPreferenceService: UserPreferenceService | null = null;
+
+  private async getServices() {
+    if (!this.userPreferenceService) {
+      const mongoClient = await getMongoClient();
+      this.userPreferenceService = new UserPreferenceService(mongoClient);
+    }
+    const vipService = await VIPService.getInstance();
+    return {
+      userPreferenceService: this.userPreferenceService,
+      vipService,
+    };
+  }
+
   async handleCommand(
     args: string[],
     jid: string,
@@ -76,11 +97,114 @@ export class StickerCommand extends CommandInterface {
     msg: proto.IWebMessageInfo,
   ): Promise<void> {
     const config = await getCurrentConfig();
+    const { userPreferenceService, vipService } = await this.getServices();
 
     try {
+      const isVip = await vipService.isVIP(user);
+
+      // Handle subcommands for VIP users to set custom pack/author
+      if (
+        args.length >= 2 &&
+        (args[0].toLowerCase() === "pack" || args[0].toLowerCase() === "author")
+      ) {
+        if (!isVip) {
+          await sock.sendMessage(jid, {
+            text: `${config.emoji.error} Fitur ubah nama pack & author cuma buat VIP members bestie! 👑\n\nKetik *${config.prefix}vip* buat info lanjut.`,
+          });
+          return;
+        }
+
+        const value = args.slice(1).join(" ").trim();
+        if (args[0].toLowerCase() === "pack") {
+          await userPreferenceService.set(user, { stickerPack: value });
+          await sock.sendMessage(jid, {
+            text: `✅ Mantap! Mulai sekarang sticker kamu bakal pakai nama pack: *${value}*`,
+          });
+        } else {
+          await userPreferenceService.set(user, { stickerAuthor: value });
+          await sock.sendMessage(jid, {
+            text: `✅ Mantap! Mulai sekarang sticker kamu bakal pakai nama author: *${value}*`,
+          });
+        }
+        return; // Exit since we just updated preferences
+      }
+
+      const fullArgs = args.join(" ");
+      let customPack: string | undefined;
+      let customAuthor: string | undefined;
+
+      const packMatch = fullArgs.match(/--pack\s+([^'"\s]+|'[^']+'|"[^"]+")/);
+      if (packMatch) {
+        customPack = packMatch[1].replace(/['"]/g, "");
+      }
+
+      const authorMatch = fullArgs.match(
+        /--author\s+([^'"\s]+|'[^']+'|"[^"]+")/,
+      );
+      if (authorMatch) {
+        customAuthor = authorMatch[1].replace(/['"]/g, "");
+      }
+
+      // Filter out parsed flags from args for cleaner extraction
+      const cleanArgs = args.filter((arg, i) => {
+        if (arg === "--pack" || arg === "--author") return false;
+        if (i > 0 && (args[i - 1] === "--pack" || args[i - 1] === "--author"))
+          return false;
+        // if the arg was grouped in quotes it might be split across indices, but args.filter isn't perfect for quoted strings.
+        // We'll rely on the existing logic and strip out matches from fullArgs string later if needed.
+        return true;
+      });
+
+      // Instead of trying to patch args array flawlessly, let's just replace the raw matches in fullArgs
+      const cleanCommandText = fullArgs
+        .replace(/--pack\s+([^'"\s]+|'[^']+'|"[^"]+")/g, "")
+        .replace(/--author\s+([^'"\s]+|'[^']+'|"[^"]+")/g, "")
+        .replace(/--(c(rop)?|kotak)/g, "")
+        .trim();
+
+      const parsedArgs = cleanCommandText ? cleanCommandText.split(/\s+/) : [];
+
+      if ((customPack || customAuthor) && !isVip) {
+        await sock.sendMessage(jid, {
+          text: `${config.emoji.error} Fitur edit nama pack & author cuma buat VIP members bestie! 👑\n\nKetik *${config.prefix}vip* buat info lanjut.`,
+        });
+        return;
+      }
+
+      let packName = config.name || "Nexa AI";
+      let authorName = msg.pushName || user.split("@")[0];
+
+      if (isVip) {
+        const prefs = await userPreferenceService.get(user);
+
+        if (customPack) {
+          packName = customPack;
+        } else if (prefs?.stickerPack) {
+          packName = prefs.stickerPack;
+        }
+
+        if (customAuthor) {
+          authorName = customAuthor;
+        } else if (prefs?.stickerAuthor) {
+          authorName = prefs.stickerAuthor;
+        }
+
+        if (customPack || customAuthor) {
+          await userPreferenceService.set(user, {
+            ...(customPack && { stickerPack: customPack }),
+            ...(customAuthor && { stickerAuthor: customAuthor }),
+          });
+        }
+      }
+
       // Check for crop flag
       const useCrop =
-        args.includes("crop") || args.includes("c") || args.includes("kotak");
+        fullArgs.includes("--crop") ||
+        fullArgs.includes("--c") ||
+        fullArgs.includes("--kotak") ||
+        args.includes("crop") ||
+        args.includes("c") ||
+        args.includes("kotak");
 
       let mediaBuffer: Buffer | null = null;
       let mediaType: "image" | "video" | null = null;
@@ -187,7 +311,7 @@ export class StickerCommand extends CommandInterface {
 
       // Priority 3: Check for URL source from args or quoted text
       if (!mediaBuffer || !mediaType) {
-        const giphyQuery = this.extractGiphyQuery(args);
+        const giphyQuery = this.extractGiphyQuery(parsedArgs);
 
         if (giphyQuery) {
           try {
@@ -220,7 +344,7 @@ export class StickerCommand extends CommandInterface {
           }
         }
 
-        const tenorQuery = this.extractTenorQuery(args);
+        const tenorQuery = this.extractTenorQuery(parsedArgs);
 
         if ((!mediaBuffer || !mediaType) && tenorQuery) {
           try {
@@ -253,7 +377,7 @@ export class StickerCommand extends CommandInterface {
           }
         }
 
-        const sourceUrl = this.extractSourceUrl(args, msg);
+        const sourceUrl = this.extractSourceUrl(parsedArgs, msg);
 
         if ((!mediaBuffer || !mediaType) && sourceUrl) {
           try {
@@ -276,14 +400,14 @@ export class StickerCommand extends CommandInterface {
           }
         }
 
-        if ((!mediaBuffer || !mediaType) && this.isGiphyMode(args)) {
+        if ((!mediaBuffer || !mediaType) && this.isGiphyMode(parsedArgs)) {
           await sock.sendMessage(jid, {
             text: `${config.emoji.error} Kata kunci Giphy-nya mana bestie? 🤔\n\nContoh: *${config.prefix}sticker giphy kucing lucu*`,
           });
           return;
         }
 
-        if ((!mediaBuffer || !mediaType) && this.isTenorMode(args)) {
+        if ((!mediaBuffer || !mediaType) && this.isTenorMode(parsedArgs)) {
           await sock.sendMessage(jid, {
             text: `${config.emoji.error} Kata kunci Tenor-nya mana bestie? 🤔\n\nContoh: *${config.prefix}sticker tenor kucing lucu*`,
           });
@@ -322,11 +446,7 @@ export class StickerCommand extends CommandInterface {
 
       // Send sticker
       await sock.sendMessage(jid, {
-        sticker: await this.addExif(
-          stickerBuffer,
-          config.name || "Nexa AI",
-          msg.pushName || user.split("@")[0],
-        ),
+        sticker: await this.addExif(stickerBuffer, packName, authorName),
       });
 
       log.info(`Sticker created for user ${user} in ${jid}`);
