@@ -321,19 +321,17 @@ export class AskAICommand extends CommandInterface {
         );
       }
 
+      let finalSystemPrompt = base_prompt;
+      if (userPushName) {
+        finalSystemPrompt += `\n\nYou are currently chatting with user: ${userPushName}`;
+      }
+
       // Build conversation messages for AI SDK.
       const messages: ModelMessage[] = [];
 
       const latestUserMessageIndex = imageInput
         ? this.findLatestUserMessageIndex(conversationHistory)
         : -1;
-
-      if (userPushName) {
-        messages.push({
-          role: "user",
-          content: `You are currently chatting with : ${userPushName}`,
-        });
-      }
 
       // Add conversation history
       for (const [index, message] of conversationHistory.entries()) {
@@ -471,7 +469,7 @@ export class AskAICommand extends CommandInterface {
         web_fetch: createTool({
           description: "Fetch content from a URL",
           inputSchema: z.object({
-            url: z.string().url(),
+            url: z.url(),
             options: z
               .object({
                 method: z.string().optional(),
@@ -487,39 +485,39 @@ export class AskAICommand extends CommandInterface {
         }),
         ...(jid && sock && msg
           ? {
-            execute_bot_command: createTool({
-              description:
-                "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
-              inputSchema: z.object({
-                commandName: z.string().min(1),
-                args: z.array(z.string()),
-              }),
-              execute: async ({ commandName, args }) =>
-                execute_bot_command(commandName, args, {
-                  jid: jid!,
-                  user,
-                  sock: sock!,
-                  msg: msg!,
+              execute_bot_command: createTool({
+                description:
+                  "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
+                inputSchema: z.object({
+                  commandName: z.string().min(1),
+                  args: z.array(z.string()),
                 }),
-            }),
-          }
+                execute: async ({ commandName, args }) =>
+                  execute_bot_command(commandName, args, {
+                    jid: jid!,
+                    user,
+                    sock: sock!,
+                    msg: msg!,
+                  }),
+              }),
+            }
           : {}),
       };
 
       const result = await generateText({
         model: route.model,
-        system: base_prompt,
+        system: finalSystemPrompt,
         messages,
         temperature: 0.6,
         providerOptions:
           route.provider === "google"
             ? {
-              google: {
-                thinkingConfig: {
-                  thinkingLevel: "minimal",
+                google: {
+                  thinkingConfig: {
+                    thinkingLevel: "minimal",
+                  },
                 },
-              },
-            }
+              }
             : undefined,
         stopWhen: stepCountIs(5),
         tools: aiTools,
