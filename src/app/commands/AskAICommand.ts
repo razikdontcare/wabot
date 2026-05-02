@@ -179,12 +179,12 @@ export class AskAICommand extends CommandInterface {
 
         if (prompt) {
           prompt =
-            `${replyContext}:\n"` +
-            quotedText.trim() +
-            "\"\n\nThe user's question:\n" +
-            prompt;
+            `[${replyContext}]:\n` +
+            `"${quotedText.trim()}"\n\n` +
+            `[User's Reply]:\n` +
+            `"${prompt}"`;
         } else {
-          prompt = `${replyContext}:\n"` + quotedText.trim() + '"';
+          prompt = `[${replyContext}]:\n"${quotedText.trim()}"`;
         }
       }
     }
@@ -329,16 +329,25 @@ export class AskAICommand extends CommandInterface {
       // Build conversation messages for AI SDK.
       const messages: ModelMessage[] = [];
 
+      // Limit to last 20 messages to prevent context window overflow
+      const MAX_CONTEXT_TURNS = 20;
+      const recentHistory = conversationHistory.slice(-MAX_CONTEXT_TURNS);
+
       const latestUserMessageIndex = imageInput
-        ? this.findLatestUserMessageIndex(conversationHistory)
+        ? this.findLatestUserMessageIndex(recentHistory)
         : -1;
 
       // Add conversation history
-      for (const [index, message] of conversationHistory.entries()) {
+      for (const [index, message] of recentHistory.entries()) {
         // Do not replay stored tool messages from previous turns.
         // They may lack required metadata (tool name + paired tool_calls context)
         // and can break provider-side validation.
         if (message.role === "tool") {
+          continue;
+        }
+
+        // Also skip assistant messages that have empty content (likely tool call triggers without text)
+        if (message.role === "assistant" && !message.content?.trim()) {
           continue;
         }
 
