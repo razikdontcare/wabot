@@ -29,7 +29,7 @@ export const BotConfig = {
   // Pengaturan Prefix
   prefix: "!",
   alternativePrefixes: ["/"],
-  allowMentionPrefix: false, // Aktifkan untuk mengizinkan prefix mention (@bot command)
+  allowMentionPrefix: true, // Aktifkan untuk mengizinkan prefix mention hanya untuk perintah AI ("@bot ..." memicu perintah ai)
 
   // Pengaturan Umum
   name: "Nexa AI",

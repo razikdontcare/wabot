@@ -320,8 +320,25 @@ export class BotClient {
                 this.botId,
               );
               if (commandText) {
+                // Determine if user explicitly invoked the AI command (e.g., "ai" or "ask").
+                const tokens = commandText.trim().split(/\s+/);
+                let firstToken = tokens[0] ? tokens[0].toLowerCase() : "";
+                // If the user included the bot prefix (e.g., "!ai"), strip it for comparison.
+                if (firstToken.startsWith(config.prefix)) {
+                  firstToken = firstToken.slice(config.prefix.length);
+                }
+                const aiCommandNames = ["ai", "ask"];
+                let routedCommand: string;
+                if (aiCommandNames.includes(firstToken)) {
+                  // Explicit AI command: preserve user's intent
+                  routedCommand = config.prefix + commandText;
+                } else {
+                  // Implicit mention: treat the full text as an AI prompt
+                  routedCommand = config.prefix + "ai " + commandText;
+                }
+
                 await this.commandHandler.handleCommand(
-                  config.prefix + commandText,
+                  routedCommand,
                   baseJid,
                   baseUser,
                   this.sock!,
