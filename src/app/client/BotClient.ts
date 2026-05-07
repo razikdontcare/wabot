@@ -310,22 +310,54 @@ export class BotClient {
             const config = await getCurrentConfig().catch(() => BotConfig);
             if (m.key.fromMe && !config.allowFromMe) continue;
 
+            const mentionedJids = [
+              ...(m.message?.extendedTextMessage?.contextInfo?.mentionedJid ||
+                []),
+              ...(m.message?.imageMessage?.contextInfo?.mentionedJid || []),
+              ...(m.message?.videoMessage?.contextInfo?.mentionedJid || []),
+              ...(m.message?.documentMessage?.contextInfo?.mentionedJid || []),
+            ];
+
+            const mentionIds = [
+              this.botId,
+              process.env.BOT_LID,
+              "94726124498981",
+            ].filter((id): id is string => Boolean(id));
+
+            const botMentionedViaMetadata =
+              mentionIds.length > 0 &&
+              mentionedJids.some(
+                (mentionedJid) =>
+                  mentionIds.includes(mentionedJid.split("@")[0].split(":")[0]),
+              );
+
+            const botMentionedInText =
+              mentionIds.length > 0 &&
+              mentionIds.some((mentionId) => baseText.includes(`@${mentionId}`));
+
             if (
               config.allowMentionPrefix &&
-              this.botId &&
-              baseText.includes(`@${this.botId}`)
+              mentionIds.length > 0 &&
+              (botMentionedViaMetadata || botMentionedInText)
             ) {
               const commandText = this.extractCommandFromMention(
                 baseText,
-                this.botId,
+                mentionIds,
               );
               if (commandText) {
                 // Determine if user explicitly invoked the AI command (e.g., "ai" or "ask").
                 const tokens = commandText.trim().split(/\s+/);
                 let firstToken = tokens[0] ? tokens[0].toLowerCase() : "";
-                // If the user included the bot prefix (e.g., "!ai"), strip it for comparison.
-                if (firstToken.startsWith(config.prefix)) {
-                  firstToken = firstToken.slice(config.prefix.length);
+                const knownPrefixes = [
+                  config.prefix,
+                  ...config.alternativePrefixes,
+                ].filter(Boolean);
+                // If the user included command prefix (e.g., "!ai" or "/ai"), strip it for comparison.
+                for (const prefix of knownPrefixes) {
+                  if (firstToken.startsWith(prefix)) {
+                    firstToken = firstToken.slice(prefix.length);
+                    break;
+                  }
                 }
                 const aiCommandNames = ["ai", "ask"];
                 let routedCommand: string;
@@ -400,11 +432,33 @@ export class BotClient {
 
   private extractCommandFromMention(
     text: string,
-    botId: string,
+    mentionIds: string[],
   ): string | null {
-    const mentionPattern = new RegExp(`@${botId}\\s+(.+)`, "i");
-    const match = text.match(mentionPattern);
-    return match ? match[1].trim() : null;
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      return null;
+    }
+
+    for (const mentionId of mentionIds) {
+      const leadingMentionPattern = new RegExp(`^@${mentionId}\\s*`, "i");
+      if (leadingMentionPattern.test(trimmedText)) {
+        const withoutMention = trimmedText
+          .replace(leadingMentionPattern, "")
+          .trim();
+        return withoutMention || null;
+      }
+    }
+
+    for (const mentionId of mentionIds) {
+      const mentionPattern = new RegExp(`@${mentionId}\\s+(.+)`, "i");
+      const match = trimmedText.match(mentionPattern);
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    }
+
+    // Fallback for clients that store mention only in metadata (without visible @number in text).
+    return trimmedText;
   }
 
   private cleanupSocket() {
