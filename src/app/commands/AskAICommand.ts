@@ -455,7 +455,7 @@ export class AskAICommand extends CommandInterface {
           inputSchema: z
             .object({
               mediaType: z.enum(["image", "video", "audio", "document"]),
-              url: z.string().url().optional(),
+              url: z.url().optional(),
               dataUrl: z.string().optional(),
               caption: z.string().optional(),
               fileName: z.string().optional(),
