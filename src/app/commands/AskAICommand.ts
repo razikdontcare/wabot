@@ -40,6 +40,7 @@ import {
 } from "../../shared/utils/ai_agent_tools.js";
 import {
   AI_PERSONALITIES,
+  getKnownUsersForPersonality,
   loadPersonalityPrompt,
   type AIPersonality,
 } from "../../shared/utils/promptLoader.js";
@@ -64,7 +65,7 @@ export class AskAICommand extends CommandInterface {
 • ${BotConfig.prefix}ai status — Lihat status sesi percakapan
 • ${BotConfig.prefix}ai end — Akhiri sesi percakapan
 • ${BotConfig.prefix}ai provider — Lihat preferensi provider AI Anda
-• ${BotConfig.prefix}ai provider <groq|google|auto|default> — Atur provider AI Anda
+• ${BotConfig.prefix}ai provider <groq|google|openrouter|auto|default> — Atur provider AI Anda
 • ${BotConfig.prefix}ai personality — Lihat personality AI Anda
 • ${BotConfig.prefix}ai personality <nexa|luna|default> — Ganti personality AI
 • ${BotConfig.prefix}ai kb help — Bantuan knowledge base (vector DB)
@@ -301,12 +302,19 @@ export class AskAICommand extends CommandInterface {
     userPersonalityPreference?: AIPersonality | null,
   ): Promise<string> {
     try {
+      const activePersonality = userPersonalityPreference || "nexa";
+      const knownUserContextInstruction = this.buildKnownUserContextInstruction(
+        userPushName,
+        activePersonality,
+      );
+
       // Load the base prompt from markdown file
       const base_prompt = loadPersonalityPrompt(
-        userPersonalityPreference || "nexa",
+        activePersonality,
         {
           groupContext,
           currentDate: new Date().toString(),
+          additionalInstructions: knownUserContextInstruction,
         },
       );
 
@@ -562,6 +570,73 @@ export class AskAICommand extends CommandInterface {
     return this.userPreferenceService;
   }
 
+  private buildKnownUserContextInstruction(
+    userPushName: string | null | undefined,
+    personality: AIPersonality,
+  ): string | undefined {
+    if (!userPushName?.trim()) {
+      return undefined;
+    }
+
+    const match = this.findKnownUserMatch(userPushName, personality);
+    if (match) {
+      return (
+        `Known-user verification (runtime): user display name "${userPushName}" matches known user "${match.canonicalName}" via alias "${match.matchedAlias}". ` +
+        `Treat this user as Known User for nickname and familiarity rules.`
+      );
+    }
+
+    return (
+      `Known-user verification (runtime): user display name "${userPushName}" does not match the KNOWN USERS alias list for the active personality. ` +
+      `Treat this user as unknown user unless user provides additional proof/context.`
+    );
+  }
+
+  private findKnownUserMatch(
+    userPushName: string,
+    personality: AIPersonality,
+  ): { canonicalName: string; matchedAlias: string } | null {
+    const normalizedName = this.normalizeIdentity(userPushName);
+    if (!normalizedName) {
+      return null;
+    }
+
+    const nameTokens = new Set(
+      normalizedName.split(" ").map((token) => token.trim()).filter(Boolean),
+    );
+
+    const knownUsers = getKnownUsersForPersonality(personality);
+    for (const knownUser of knownUsers) {
+      for (const alias of knownUser.aliases) {
+        const normalizedAlias = this.normalizeIdentity(alias);
+        if (!normalizedAlias) {
+          continue;
+        }
+
+        if (
+          normalizedName === normalizedAlias ||
+          nameTokens.has(normalizedAlias)
+        ) {
+          return {
+            canonicalName: knownUser.canonicalName,
+            matchedAlias: alias,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeIdentity(value: string): string {
+    return value
+      .normalize("NFKD")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
   private async getUserProviderPreference(
     user: string,
   ): Promise<AIProviderPreference | null> {
@@ -626,7 +701,7 @@ export class AskAICommand extends CommandInterface {
           `• Default bot: ${BotConfig.aiProvider}\n` +
           `• Rute teks aktif: ${textRouteText}\n` +
           `• Rute gambar aktif: ${imageRouteText}\n\n` +
-          `Gunakan ${BotConfig.prefix}ai provider <groq|google|auto|default> untuk mengubah preferensi.`,
+          `Gunakan ${BotConfig.prefix}ai provider <groq|google|openrouter|auto|default> untuk mengubah preferensi.`,
       });
       return;
     }
@@ -652,12 +727,13 @@ export class AskAICommand extends CommandInterface {
       if (
         requested !== "groq" &&
         requested !== "google" &&
+        requested !== "openrouter" &&
         requested !== "auto"
       ) {
         await sock.sendMessage(jid, {
           text:
             `❌ Provider tidak valid: ${requested}\n` +
-            `Gunakan: ${BotConfig.prefix}ai provider <groq|google|auto|default>`,
+            `Gunakan: ${BotConfig.prefix}ai provider <groq|google|openrouter|auto|default>`,
         });
         return;
       }

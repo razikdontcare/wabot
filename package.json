@@ -37,6 +37,7 @@
     "@ai-sdk/groq": "^3.0.34",
     "@gradio/client": "^1.15.5",
     "@hono/node-server": "^1.14.1",
+    "@openrouter/ai-sdk-provider": "^2.9.0",
     "@tavily/core": "^0.7.2",
     "ai": "^6.0.150",
     "axios": "^1.8.4",

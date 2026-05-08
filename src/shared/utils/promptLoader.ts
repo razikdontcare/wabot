@@ -38,7 +38,13 @@ interface PromptContext {
   additionalInstructions?: string;
 }
 
+export interface KnownUserEntry {
+  canonicalName: string;
+  aliases: string[];
+}
+
 const DEFAULT_AI_PERSONALITY: AIPersonality = "nexa";
+const knownUsersCache = new Map<string, KnownUserEntry[]>();
 
 /**
  * Loads and parses a prompt template from a markdown file
@@ -156,6 +162,72 @@ export function loadPersonalityPrompt(
     PERSONALITY_PROMPT_FILES[DEFAULT_AI_PERSONALITY];
   const basePrompt = loadPrompt(promptFile);
   return appendCommonPromptSections(basePrompt, context);
+}
+
+export function getKnownUsersForPersonality(
+  personality: AIPersonality = DEFAULT_AI_PERSONALITY,
+): KnownUserEntry[] {
+  const promptFile =
+    PERSONALITY_PROMPT_FILES[personality] ||
+    PERSONALITY_PROMPT_FILES[DEFAULT_AI_PERSONALITY];
+
+  if (knownUsersCache.has(promptFile)) {
+    return knownUsersCache.get(promptFile)!;
+  }
+
+  const prompt = loadPrompt(promptFile);
+  const lines = prompt.split(/\r?\n/);
+  const entries: KnownUserEntry[] = [];
+  let inKnownUsersSection = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!inKnownUsersSection) {
+      if (/^##\s+KNOWN USERS\b/i.test(line)) {
+        inKnownUsersSection = true;
+      }
+      continue;
+    }
+
+    if (/^##\s+/.test(line)) {
+      break;
+    }
+
+    if (!line.startsWith("|")) {
+      continue;
+    }
+
+    if (line.includes("---")) {
+      continue;
+    }
+
+    const columns = line
+      .split("|")
+      .map((col) => col.trim())
+      .filter(Boolean);
+
+    if (columns.length === 0 || /^name$/i.test(columns[0])) {
+      continue;
+    }
+
+    const aliases = columns[0]
+      .split("/")
+      .map((alias) => alias.trim())
+      .filter(Boolean);
+
+    if (aliases.length === 0) {
+      continue;
+    }
+
+    entries.push({
+      canonicalName: aliases[0],
+      aliases,
+    });
+  }
+
+  knownUsersCache.set(promptFile, entries);
+  return entries;
 }
 
 /**

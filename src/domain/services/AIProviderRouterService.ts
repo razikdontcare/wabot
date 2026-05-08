@@ -1,5 +1,6 @@
 import { createGroq } from "@ai-sdk/groq";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import {
   BotConfig,
@@ -7,7 +8,7 @@ import {
   type AIProviderPreference,
 } from "../../infrastructure/config/config.js";
 
-export type AIProviderName = "groq" | "google";
+export type AIProviderName = "groq" | "google" | "openrouter";
 
 export interface AIProviderRoute {
   provider: AIProviderName;
@@ -22,6 +23,9 @@ export class AIProviderRouterService {
   private groq = createGroq({ apiKey: BotConfig.groqApiKey });
   private google = createGoogleGenerativeAI({
     apiKey: BotConfig.googleGenerativeAiApiKey,
+  });
+  private openrouter = createOpenRouter({
+    apiKey: process.env.OPENROUTER_API_KEY || "",
   });
 
   static getInstance(): AIProviderRouterService {
@@ -90,6 +94,23 @@ export class AIProviderRouterService {
       }
     }
 
+    if (preferredProvider === "openrouter") {
+      if (process.env.OPENROUTER_API_KEY) {
+        return {
+          provider: "openrouter",
+          modelId: BotConfig.aiModelOpenRouter,
+          supportsMultimodal: false,
+          model: this.openrouter(BotConfig.aiModelOpenRouter),
+        };
+      }
+
+      if (BotConfig.groqApiKey || BotConfig.googleGenerativeAiApiKey) {
+        log.warn(
+          "AI provider is set to openrouter, but OPENROUTER_API_KEY is missing. Falling back to available provider.",
+        );
+      }
+    }
+
     if (preferredProvider === "auto") {
       if (BotConfig.groqApiKey) {
         return {
@@ -106,6 +127,15 @@ export class AIProviderRouterService {
           modelId: BotConfig.aiModelGoogle,
           supportsMultimodal: true,
           model: this.google(BotConfig.aiModelGoogle),
+        };
+      }
+
+      if (process.env.OPENROUTER_API_KEY) {
+        return {
+          provider: "openrouter",
+          modelId: BotConfig.aiModelOpenRouter,
+          supportsMultimodal: false,
+          model: this.openrouter(BotConfig.aiModelOpenRouter),
         };
       }
     }
@@ -128,8 +158,17 @@ export class AIProviderRouterService {
       };
     }
 
+    if (process.env.OPENROUTER_API_KEY) {
+      return {
+        provider: "openrouter",
+        modelId: BotConfig.aiModelOpenRouter,
+        supportsMultimodal: false,
+        model: this.openrouter(BotConfig.aiModelOpenRouter),
+      };
+    }
+
     throw new Error(
-      "No AI provider key configured. Set GROQ_API_KEY and/or GOOGLE_GENERATIVE_AI_API_KEY.",
+      "No AI provider key configured. Set GROQ_API_KEY and/or GOOGLE_GENERATIVE_AI_API_KEY and/or OPENROUTER_API_KEY.",
     );
   }
 }
