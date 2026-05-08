@@ -29,6 +29,7 @@ interface SeenGiveaway {
 interface PollNewGiveawaysOptions {
   bootstrapIfEmpty?: boolean;
   bootstrapLimit?: number;
+  persist?: boolean;
 }
 
 export class FreeGamesService {
@@ -65,8 +66,25 @@ export class FreeGamesService {
   async pollNewGiveaways(
     options: PollNewGiveawaysOptions = {},
   ): Promise<GamerPowerGiveaway[]> {
-    const { bootstrapIfEmpty = true, bootstrapLimit = 3 } = options;
+    const {
+      bootstrapIfEmpty = true,
+      bootstrapLimit = 3,
+      persist = true,
+    } = options;
     const giveaways = await this.fetchGiveaways();
+    log.info(
+      `[FreeGamesService] Fetched ${giveaways.length} giveaways from API`,
+    );
+    const invalidIds = giveaways
+      .filter(
+        (g) => !Number.isFinite(Number((g as unknown as { id?: unknown }).id)),
+      )
+      .map((g) => String((g as unknown as { id?: unknown }).id));
+    if (invalidIds.length > 0) {
+      log.warn(
+        `[FreeGamesService] Ignoring ${invalidIds.length} giveaway(s) with non-numeric id(s): ${invalidIds.join(", ")}`,
+      );
+    }
     if (giveaways.length === 0) {
       return [];
     }
@@ -77,19 +95,34 @@ export class FreeGamesService {
     const ids = giveaways
       .map((item) => item.id)
       .filter((item) => Number.isFinite(item));
+    log.debug(
+      `[FreeGamesService] Candidate ids for known-check: ${ids.join(",")}`,
+    );
     const knownIds = await this.collection
       .find({ giveawayId: { $in: ids } })
       .project({ giveawayId: 1, _id: 0 })
       .toArray();
 
+    log.debug(
+      `[FreeGamesService] Found ${knownIds.length} known id(s) in DB out of ${ids.length} candidate id(s)`,
+    );
+
     const knownIdSet = new Set(knownIds.map((item) => item.giveawayId));
     const newGiveaways = giveaways.filter((item) => !knownIdSet.has(item.id));
 
+    log.info(
+      `[FreeGamesService] Computed ${newGiveaways.length} new giveaway(s) (fetched ${giveaways.length})`,
+    );
+
     if (newGiveaways.length === 0) {
+      log.debug("[FreeGamesService] No new giveaways to persist or return");
       return [];
     }
 
-    await this.persistSeenGiveaways(newGiveaways);
+    // Persist immediately only when requested, or during initial bootstrap
+    if (persist || !hasSeenData) {
+      await this.persistSeenGiveaways(newGiveaways);
+    }
 
     if (!hasSeenData && bootstrapIfEmpty) {
       const safeLimit = Math.max(1, Math.floor(bootstrapLimit));
@@ -118,6 +151,13 @@ export class FreeGamesService {
         this.parseDate(a.published_date).getTime() -
         this.parseDate(b.published_date).getTime(),
     );
+  }
+
+  /**
+   * Mark giveaways as seen in the DB. Safe to call after sending messages.
+   */
+  async markGiveawaysSeen(giveaways: GamerPowerGiveaway[]): Promise<void> {
+    await this.persistSeenGiveaways(giveaways);
   }
 
   async getLatestGiveaways(limit = 5): Promise<GamerPowerGiveaway[]> {
@@ -278,5 +318,19 @@ function isDuplicateWriteError(error: unknown): boolean {
     return false;
   }
 
-  return "code" in error && error.code === 11000;
+  try {
+    const rec = error as Record<string, unknown>;
+    if (rec && typeof rec.code !== "undefined") {
+      if (typeof rec.code === "number") {
+        return rec.code === 11000;
+      }
+      // Some drivers use string codes
+      if (typeof rec.code === "string") {
+        return Number(rec.code) === 11000;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }

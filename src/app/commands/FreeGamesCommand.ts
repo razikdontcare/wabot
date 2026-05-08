@@ -147,6 +147,7 @@ Ketik */freegames reset confirm* untuk melanjutkan.`,
       const newGiveaways = await freeGamesService.pollNewGiveaways({
         bootstrapIfEmpty: true,
         bootstrapLimit: 5,
+        persist: false,
       });
 
       if (newGiveaways.length === 0) {
@@ -182,6 +183,15 @@ Ketik */freegames reset confirm* untuk melanjutkan.`,
         await sock.sendMessage(jid, {
           text: formatFreeGamesMessage(giveaway, targetUrl),
         });
+      }
+
+      // Mark delivered giveaways as seen
+      try {
+        await freeGamesService.markGiveawaysSeen(newGiveaways);
+      } catch (err) {
+        // Log but don't fail the command
+
+        console.error("Failed to mark giveaways as seen:", err);
       }
 
       await sock.sendMessage(jid, {
