@@ -7,16 +7,21 @@ config(); // Load environment variables from .env file
 
 // Define all possible roles here
 export type UserRole = "admin" | "moderator" | "vip";
-export type AIProviderPreference = "groq" | "google" | "auto";
+export type AIProviderPreference = "groq" | "google" | "openrouter" | "auto";
 
 function resolveAIProviderPreference(): AIProviderPreference {
-  const raw = (process.env.AI_PROVIDER || "google").toLowerCase();
+  const raw = (process.env.AI_PROVIDER || "openrouter").toLowerCase();
 
-  if (raw === "google" || raw === "auto" || raw === "groq") {
+  if (
+    raw === "google" ||
+    raw === "auto" ||
+    raw === "groq" ||
+    raw === "openrouter"
+  ) {
     return raw;
   }
 
-  return "google";
+  return "openrouter";
 }
 
 function resolveNumberEnv(value: string | undefined, fallback: number): number {
@@ -61,10 +66,12 @@ export const BotConfig = {
   tavilyApiKey: process.env.TAVILY_API_KEY || "", // Kunci API untuk Tavily AI
 
   // Pengaturan AI Provider Routing
-  aiProvider: resolveAIProviderPreference(), // groq | google | auto
+  aiProvider: resolveAIProviderPreference(), // groq | google | openrouter | auto
   aiModelGroq:
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
   aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
+  aiModelOpenRouter:
+    process.env.AI_MODEL_OPENROUTER || "openrouter/owl-alpha",
   aiMultimodalModelGoogle:
     process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiEmbeddingModelGoogle:

@@ -43,7 +43,12 @@ export class UserPreferenceService {
     const preference = await this.get(user);
     const value = preference?.aiProviderPreference;
 
-    if (value === "groq" || value === "google" || value === "auto") {
+    if (
+      value === "groq" ||
+      value === "google" ||
+      value === "openrouter" ||
+      value === "auto"
+    ) {
       return value;
     }
 
