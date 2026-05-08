@@ -542,18 +542,30 @@ export class AIKnowledgeVectorService {
 
   private async countPoints(filter?: Record<string, unknown>): Promise<number> {
     const collection = encodeURIComponent(BotConfig.qdrantCollection);
-    const result = await this.qdrantRequest<{ count?: number }>(
-      `/collections/${collection}/points/count`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          exact: true,
-          ...(filter ? { filter } : {}),
-        }),
-      },
-    );
+    try {
+      const result = await this.qdrantRequest<{ count?: number }>(
+        `/collections/${collection}/points/count`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            exact: true,
+            ...(filter ? { filter } : {}),
+          }),
+        },
+      );
 
-    return typeof result?.count === "number" ? result.count : 0;
+      return typeof result?.count === "number" ? result.count : 0;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/index required/i.test(message) || /Index required/i.test(message)) {
+        log.warn(
+          "Qdrant countPoints failed due to missing payload index. Create a keyword index for filtered fields (eg. 'scope') in Qdrant.",
+        );
+        return 0;
+      }
+
+      throw err;
+    }
   }
 
   private async scrollPoints(

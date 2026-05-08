@@ -306,16 +306,33 @@ export class AskAICommand extends CommandInterface {
   ): Promise<string> {
     try {
       const activePersonality = userPersonalityPreference || "nexa";
+      const isGroupChat = Boolean(jid?.endsWith("@g.us"));
+      const userRoles = await getUserRoles(user);
       const knownUserContextInstruction = this.buildKnownUserContextInstruction(
         userPushName,
         activePersonality,
       );
+      const runtimeUserContextInstruction =
+        this.buildRuntimeUserContextInstruction({
+          userId: user,
+          displayName: userPushName,
+          jid,
+          isGroupChat,
+          activePersonality,
+          providerPreference: userProviderPreference || null,
+          userRoles,
+        });
 
       // Load the base prompt from markdown file
       const base_prompt = loadPersonalityPrompt(activePersonality, {
         groupContext,
         currentDate: new Date().toString(),
-        additionalInstructions: knownUserContextInstruction,
+        additionalInstructions: [
+          knownUserContextInstruction,
+          runtimeUserContextInstruction,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       });
 
       const route = this.providerRouter.getRoutedModel({
@@ -335,7 +352,7 @@ export class AskAICommand extends CommandInterface {
       }
 
       finalSystemPrompt +=
-        `\n\nUser-facing output rule: do not use the final assistant text as the reply to the user.` +
+        `\n\nUser-facing output rule: You can only communicate back to the user through \`reply_message()\`, \`send_message()\`, and \`send_media()\`` +
         ` Always deliver the actual response using reply_message() or send_message().` +
         ` If you need to send a file, image, video, audio, or document, use send_media().`;
 
@@ -396,6 +413,8 @@ export class AskAICommand extends CommandInterface {
 
         messages.push(messageObj);
       }
+
+      let responseToolUsed = false;
 
       const aiTools = {
         knowledge_search: createTool({
@@ -580,6 +599,7 @@ export class AskAICommand extends CommandInterface {
         system: finalSystemPrompt,
         messages,
         temperature: 0.6,
+        toolChoice: "required",
         providerOptions:
           route.provider === "google"
             ? {
@@ -601,11 +621,31 @@ export class AskAICommand extends CommandInterface {
             .map((call) => call?.toolName)
             .filter((name): name is string => Boolean(name));
 
+          if (
+            calledTools.includes("reply_message") ||
+            calledTools.includes("send_message") ||
+            calledTools.includes("send_media")
+          ) {
+            responseToolUsed = true;
+          }
+
           if (calledTools.length > 0) {
             log.info(`Tool calls detected: ${calledTools.join(", ")}`);
           }
         },
       });
+
+      if (!responseToolUsed) {
+        const fallbackResponse = result.text?.trim();
+
+        if (fallbackResponse && jid && sock && msg) {
+          await reply_chat_message(fallbackResponse, {
+            jid,
+            sock,
+            msg,
+          });
+        }
+      }
 
       return result.text || "Tidak ada jawaban yang diberikan oleh AI.";
     } catch (error) {
@@ -644,6 +684,44 @@ export class AskAICommand extends CommandInterface {
       `Known-user verification (runtime): user display name "${userPushName}" does not match the KNOWN USERS alias list for the active personality. ` +
       `Treat this user as unknown user unless user provides additional proof/context.`
     );
+  }
+
+  private buildRuntimeUserContextInstruction(input: {
+    userId: string;
+    displayName?: string | null;
+    jid?: string;
+    isGroupChat: boolean;
+    activePersonality: AIPersonality;
+    providerPreference: AIProviderPreference | null;
+    userRoles: string[];
+  }): string {
+    const lines = ["Runtime user context:"];
+
+    lines.push(`- User ID: ${input.userId}`);
+    lines.push(`- Chat type: ${input.isGroupChat ? "group" : "private"}`);
+
+    if (input.jid) {
+      lines.push(`- Chat JID: ${input.jid}`);
+    }
+
+    if (input.displayName?.trim()) {
+      lines.push(`- Display name: ${input.displayName.trim()}`);
+    }
+
+    lines.push(`- Active personality: ${input.activePersonality}`);
+    lines.push(
+      `- AI provider preference: ${input.providerPreference || "default bot"}`,
+    );
+
+    if (input.userRoles.length > 0) {
+      lines.push(`- User roles: ${input.userRoles.join(", ")}`);
+    }
+
+    lines.push(
+      "Use these details to adjust tone, depth, and follow-up behavior. Do not mention them unless directly relevant.",
+    );
+
+    return lines.join("\n");
   }
 
   private findKnownUserMatch(
