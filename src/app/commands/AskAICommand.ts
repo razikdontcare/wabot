@@ -26,6 +26,9 @@ import {
   get_bot_commands,
   get_command_help,
   knowledge_search,
+  reply_chat_message,
+  send_chat_media,
+  send_chat_message,
   upsert_knowledge,
   web_search,
 } from "../../shared/utils/ai_tools.js";
@@ -117,11 +120,11 @@ export class AskAICommand extends CommandInterface {
           return;
 
         case "status":
-          await this.handleStatusCommand(user, jid, sock, msg);
+          await this.handleStatusCommand(user, jid, sock);
           return;
 
         case "end":
-          await this.handleEndCommand(user, jid, sock, msg);
+          await this.handleEndCommand(user, jid, sock);
           return;
 
         case "provider":
@@ -309,14 +312,11 @@ export class AskAICommand extends CommandInterface {
       );
 
       // Load the base prompt from markdown file
-      const base_prompt = loadPersonalityPrompt(
-        activePersonality,
-        {
-          groupContext,
-          currentDate: new Date().toString(),
-          additionalInstructions: knownUserContextInstruction,
-        },
-      );
+      const base_prompt = loadPersonalityPrompt(activePersonality, {
+        groupContext,
+        currentDate: new Date().toString(),
+        additionalInstructions: knownUserContextInstruction,
+      });
 
       const route = this.providerRouter.getRoutedModel({
         requiresMultimodal: Boolean(imageInput),
@@ -417,6 +417,55 @@ export class AskAICommand extends CommandInterface {
             topic: z.enum(["general", "news", "finance"]).optional(),
           }),
           execute: async ({ query, topic }) => web_search(query, topic),
+        }),
+        send_message: createTool({
+          description:
+            "Send a plain text follow-up message to the current chat.",
+          inputSchema: z.object({
+            text: z.string().min(1),
+          }),
+          execute: async ({ text }) =>
+            send_chat_message(text, {
+              jid: jid!,
+              sock: sock!,
+              msg: msg!,
+            }),
+        }),
+        reply_message: createTool({
+          description:
+            "Send a plain text reply that quotes the current user message.",
+          inputSchema: z.object({
+            text: z.string().min(1),
+          }),
+          execute: async ({ text }) =>
+            reply_chat_message(text, {
+              jid: jid!,
+              sock: sock!,
+              msg: msg!,
+            }),
+        }),
+        send_media: createTool({
+          description:
+            "Send media or a document to the current chat from a URL or data URL.",
+          inputSchema: z
+            .object({
+              mediaType: z.enum(["image", "video", "audio", "document"]),
+              url: z.string().url().optional(),
+              dataUrl: z.string().optional(),
+              caption: z.string().optional(),
+              fileName: z.string().optional(),
+              mimetype: z.string().optional(),
+              reply: z.boolean().optional().default(false),
+            })
+            .refine((value) => Boolean(value.url || value.dataUrl), {
+              message: "Either url or dataUrl must be provided.",
+            }),
+          execute: async (input) =>
+            send_chat_media(input, {
+              jid: jid!,
+              sock: sock!,
+              msg: msg!,
+            }),
         }),
         get_bot_commands: createTool({
           description:
@@ -602,7 +651,10 @@ export class AskAICommand extends CommandInterface {
     }
 
     const nameTokens = new Set(
-      normalizedName.split(" ").map((token) => token.trim()).filter(Boolean),
+      normalizedName
+        .split(" ")
+        .map((token) => token.trim())
+        .filter(Boolean),
     );
 
     const knownUsers = getKnownUsersForPersonality(personality);
@@ -678,7 +730,7 @@ export class AskAICommand extends CommandInterface {
           preferredProvider: effectivePreference,
         });
         textRouteText = `${textRoute.provider} (${textRoute.modelId})`;
-      } catch (_error) {
+      } catch {
         textRouteText = "tidak tersedia (API key provider belum diatur)";
       }
 
@@ -689,7 +741,7 @@ export class AskAICommand extends CommandInterface {
           requiresMultimodal: true,
         });
         imageRouteText = `${imageRoute.provider} (${imageRoute.modelId})`;
-      } catch (_error) {
+      } catch {
         imageRouteText =
           "tidak tersedia (GOOGLE_GENERATIVE_AI_API_KEY belum diatur)";
       }
@@ -795,9 +847,14 @@ export class AskAICommand extends CommandInterface {
 
       if (requested === "default" || requested === "reset") {
         await preferenceService.clearAIPersonalityPreference(user);
+        const endedSession = await this.conversationService.endSession(user);
 
         await sock.sendMessage(jid, {
-          text: "✅ Personality AI Anda direset ke default (nexa).",
+          text:
+            `✅ Personality AI Anda direset ke default (nexa).` +
+            (endedSession
+              ? `\nSesi percakapan AI lama juga sudah diakhiri supaya persona baru mulai bersih.`
+              : ""),
         });
         return;
       }
@@ -815,9 +872,14 @@ export class AskAICommand extends CommandInterface {
         user,
         requested as AIPersonality,
       );
+      const endedSession = await this.conversationService.endSession(user);
 
       await sock.sendMessage(jid, {
-        text: `✅ Personality AI Anda diset ke *${requested}*.`,
+        text:
+          `✅ Personality AI Anda diset ke *${requested}*.` +
+          (endedSession
+            ? `\nSesi percakapan AI lama sudah direset agar persona baru tidak mewarisi gaya jawaban sebelumnya.`
+            : ""),
       });
     } catch (error) {
       log.error("Failed to update user AI personality preference:", error);
@@ -1051,7 +1113,7 @@ export class AskAICommand extends CommandInterface {
       let parsedUrl: URL;
       try {
         parsedUrl = new URL(urlCandidate);
-      } catch (_error) {
+      } catch {
         await sock.sendMessage(jid, {
           text: `URL tidak valid: ${urlCandidate}`,
         });
@@ -1488,7 +1550,6 @@ export class AskAICommand extends CommandInterface {
     user: string,
     jid: string,
     sock: WebSocketInfo,
-    msg: proto.IWebMessageInfo,
   ): Promise<void> {
     const sessionInfo = this.conversationService.getSessionInfo(user);
 
@@ -1516,7 +1577,6 @@ export class AskAICommand extends CommandInterface {
     user: string,
     jid: string,
     sock: WebSocketInfo,
-    msg: proto.IWebMessageInfo,
   ): Promise<void> {
     const hadSession = await this.conversationService.endSession(user);
 
