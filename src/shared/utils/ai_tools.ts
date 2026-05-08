@@ -2,7 +2,12 @@ import { tavily } from "@tavily/core";
 import { BotConfig, log } from "../../infrastructure/config/config.js";
 import { CommandHandler } from "../../app/handlers/CommandHandler.js";
 import { WebSocketInfo } from "../types/types.js";
-import { proto } from "baileys";
+import {
+  proto,
+  type AnyMessageContent,
+  type MiscMessageGenerationOptions,
+  type WAMessage,
+} from "baileys";
 import { CommandInfo } from "../../app/handlers/CommandInterface.js";
 import {
   AIKnowledgeVectorService,
@@ -32,6 +37,24 @@ interface KnowledgeUpsertParams {
   sourceId?: string;
   metadata?: Record<string, string | number | boolean | null | undefined>;
 }
+
+interface ChatActionContext {
+  jid: string;
+  sock: WebSocketInfo;
+  msg: proto.IWebMessageInfo;
+}
+
+interface SendMediaParams {
+  mediaType: "image" | "video" | "audio" | "document";
+  url?: string;
+  dataUrl?: string;
+  caption?: string;
+  fileName?: string;
+  mimetype?: string;
+  reply?: boolean;
+}
+
+const MAX_AI_MEDIA_BYTES = 20 * 1024 * 1024;
 
 // Global variable to store CommandHandler instance
 let commandHandlerInstance: CommandHandler | null = null;
@@ -262,6 +285,191 @@ export async function upsert_knowledge(
     log.error("Error storing knowledge base item:", error);
     return 0;
   }
+}
+
+export async function send_chat_message(
+  text: string,
+  context: ChatActionContext,
+): Promise<string> {
+  const cleanText = text.trim();
+
+  if (!cleanText) {
+    return "Pesan kosong tidak dikirim.";
+  }
+
+  await context.sock.sendMessage(context.jid, { text: cleanText });
+  return "Pesan berhasil dikirim.";
+}
+
+export async function reply_chat_message(
+  text: string,
+  context: ChatActionContext,
+): Promise<string> {
+  const cleanText = text.trim();
+
+  if (!cleanText) {
+    return "Pesan kosong tidak dikirim.";
+  }
+
+  await context.sock.sendMessage(
+    context.jid,
+    { text: cleanText },
+    { quoted: context.msg as WAMessage },
+  );
+
+  return "Balasan berhasil dikirim.";
+}
+
+function inferFileExtension(mimetype: string): string {
+  const normalized = mimetype.toLowerCase();
+
+  if (normalized.includes("jpeg")) return "jpg";
+  if (normalized.includes("png")) return "png";
+  if (normalized.includes("webp")) return "webp";
+  if (normalized.includes("gif")) return "gif";
+  if (normalized.includes("mp4")) return "mp4";
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return "mp3";
+  if (normalized.includes("wav")) return "wav";
+  if (normalized.includes("ogg")) return "ogg";
+  if (normalized.includes("pdf")) return "pdf";
+  if (normalized.includes("plain")) return "txt";
+  if (normalized.includes("zip")) return "zip";
+
+  return "bin";
+}
+
+function parseDataUrl(dataUrl: string): { buffer: Buffer; mimetype: string } {
+  const match = dataUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+
+  if (!match) {
+    throw new Error("Data URL tidak valid.");
+  }
+
+  const mimetype = match[1] || "application/octet-stream";
+  const isBase64 = match[2] === ";base64";
+  const payload = match[3] || "";
+
+  if (isBase64) {
+    return {
+      buffer: Buffer.from(payload, "base64"),
+      mimetype,
+    };
+  }
+
+  return {
+    buffer: Buffer.from(decodeURIComponent(payload), "utf-8"),
+    mimetype,
+  };
+}
+
+async function resolveMediaSource(
+  params: SendMediaParams,
+): Promise<{ buffer: Buffer; mimetype: string }> {
+  if (params.dataUrl) {
+    const parsed = parseDataUrl(params.dataUrl);
+
+    if (parsed.buffer.length > MAX_AI_MEDIA_BYTES) {
+      throw new Error("Media terlalu besar untuk dikirim lewat tool AI.");
+    }
+
+    return parsed;
+  }
+
+  if (!params.url) {
+    throw new Error("URL atau data URL media harus disediakan.");
+  }
+
+  const sourceUrl = new URL(params.url);
+  if (sourceUrl.protocol !== "http:" && sourceUrl.protocol !== "https:") {
+    throw new Error("Hanya URL http/https yang diizinkan untuk media.");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(sourceUrl.toString(), {
+      method: "GET",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gagal mengambil media: HTTP ${response.status}`);
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && Number(contentLength) > MAX_AI_MEDIA_BYTES) {
+      throw new Error("Media terlalu besar untuk dikirim lewat tool AI.");
+    }
+
+    const mimetype =
+      params.mimetype ||
+      response.headers.get("content-type")?.split(";")[0]?.trim() ||
+      "application/octet-stream";
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > MAX_AI_MEDIA_BYTES) {
+      throw new Error("Media terlalu besar untuk dikirim lewat tool AI.");
+    }
+
+    return { buffer, mimetype };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function send_chat_media(
+  params: SendMediaParams,
+  context: ChatActionContext,
+): Promise<string> {
+  const { buffer, mimetype } = await resolveMediaSource(params);
+  const cleanFileName = params.fileName?.trim();
+  const resolvedFileName =
+    cleanFileName || `attachment.${inferFileExtension(mimetype)}`;
+  const caption = params.caption?.trim();
+  let payload: AnyMessageContent;
+
+  switch (params.mediaType) {
+    case "image":
+      payload = {
+        image: buffer,
+        mimetype,
+        fileName: resolvedFileName,
+        ...(caption ? { caption } : {}),
+      };
+      break;
+    case "video":
+      payload = {
+        video: buffer,
+        mimetype,
+        fileName: resolvedFileName,
+        ...(caption ? { caption } : {}),
+      };
+      break;
+    case "audio":
+      payload = {
+        audio: buffer,
+        mimetype,
+        fileName: resolvedFileName,
+        ...(caption ? { caption } : {}),
+      };
+      break;
+    case "document":
+      payload = {
+        document: buffer,
+        mimetype,
+        fileName: resolvedFileName,
+        ...(caption ? { caption } : {}),
+      };
+      break;
+  }
+
+  const quoted: MiscMessageGenerationOptions | undefined = params.reply
+    ? { quoted: context.msg as WAMessage }
+    : undefined;
+  await context.sock.sendMessage(context.jid, payload, quoted);
+
+  return `Media ${params.mediaType} berhasil dikirim.`;
 }
 
 export async function web_search(
