@@ -136,6 +136,7 @@ export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
       const newGiveaways = await freeGamesService.pollNewGiveaways({
         bootstrapIfEmpty: true,
         bootstrapLimit: 5,
+        persist: false, // persist only after successful send
       });
 
       if (newGiveaways.length === 0) {
@@ -157,6 +158,13 @@ export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
             );
           }
         }
+      }
+
+      // Persist seen giveaways only after attempting to send them
+      try {
+        await freeGamesService.markGiveawaysSeen(newGiveaways);
+      } catch (err) {
+        log.error("Failed to mark giveaways as seen:", err);
       }
 
       log.info(
