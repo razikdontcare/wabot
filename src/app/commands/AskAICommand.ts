@@ -245,18 +245,21 @@ export class AskAICommand extends CommandInterface {
         userPersonalityPreference,
       );
 
-      // Add AI response to conversation history
-      await this.conversationService.addMessage(user, "assistant", response);
+      // Keep the assistant turn in memory only when there is actual text output.
+      // User-facing responses should be sent through reply_message/send_message tools.
+      if (response.trim()) {
+        await this.conversationService.addMessage(user, "assistant", response);
 
-      // Save response to group context if this is a group chat
-      if (isGroupChat) {
-        await this.responseService.saveResponse(
-          jid,
-          user,
-          userPushName || undefined,
-          prompt,
-          response,
-        );
+        // Save response to group context if this is a group chat
+        if (isGroupChat) {
+          await this.responseService.saveResponse(
+            jid,
+            user,
+            userPushName || undefined,
+            prompt,
+            response,
+          );
+        }
       }
 
       // Persist turn-level semantic memory to vector DB when configured.
@@ -280,10 +283,7 @@ export class AskAICommand extends CommandInterface {
         log.error("Failed to store vector knowledge for AI turn:", error);
       }
 
-      // Send response
-      await sock.sendMessage(jid, {
-        text: response,
-      });
+      // Do not send the model text directly; the model should respond via tools.
     } catch (error) {
       console.error("Error in AI conversation:", error);
       await sock.sendMessage(jid, {
@@ -333,6 +333,11 @@ export class AskAICommand extends CommandInterface {
       if (userPushName) {
         finalSystemPrompt += `\n\nYou are currently chatting with user: ${userPushName}`;
       }
+
+      finalSystemPrompt +=
+        `\n\nUser-facing output rule: do not use the final assistant text as the reply to the user.` +
+        ` Always deliver the actual response using reply_message() or send_message().` +
+        ` If you need to send a file, image, video, audio, or document, use send_media().`;
 
       // Build conversation messages for AI SDK.
       const messages: ModelMessage[] = [];

@@ -165,6 +165,12 @@ You have access to various bot commands through these tools:
 - If a tool was used, briefly state the result in one short sentence
 - Avoid filler phrases and avoid repeating the user's question unless it is necessary for clarity
 
+**Final Output Rule:**
+- Do not rely on plain assistant text as the user-facing reply
+- Put the actual user-facing response into \`reply_message()\` or \`send_message()\`
+- Use \`send_media()\` when the answer should be delivered as a file or attachment
+- Keep any final assistant text minimal or empty if the response has already been delivered through a tool
+
 **Safety Notes:**
 - Some commands may not be available in all contexts
 - Command execution respects user permissions and cooldowns
