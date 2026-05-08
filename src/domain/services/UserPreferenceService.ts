@@ -73,7 +73,15 @@ export class UserPreferenceService {
     user: string,
   ): Promise<AIPersonality | null> {
     const preference = await this.get(user);
-    return resolveAIPersonality(preference?.aiPersonalityPreference || null);
+    const storedPreference = preference?.aiPersonalityPreference || null;
+    const resolvedPreference = resolveAIPersonality(storedPreference);
+
+    if (storedPreference && !resolvedPreference) {
+      await this.clearAIPersonalityPreference(user);
+      return null;
+    }
+
+    return resolvedPreference;
   }
 
   async setAIPersonalityPreference(
