@@ -599,7 +599,6 @@ export class AskAICommand extends CommandInterface {
         system: finalSystemPrompt,
         messages,
         temperature: 0.6,
-        toolChoice: "required",
         providerOptions:
           route.provider === "google"
             ? {
