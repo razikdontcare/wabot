@@ -447,18 +447,18 @@ export class AIKnowledgeVectorService {
 
     const collection = encodeURIComponent(BotConfig.qdrantCollection);
     
-    // Using a match-all filter to delete all points
+    // To delete all points in indexed_only mode, we must use an indexed field.
+    // We use 'scope' which we ensure is indexed and covers all points.
     await this.qdrantRequest(
       `/collections/${collection}/points/delete?wait=true`,
       {
         method: "POST",
         body: JSON.stringify({
           filter: {
-            must_not: [
-              {
-                key: "non_existent_field",
-                match: { value: "non_existent_value" }
-              }
+            should: [
+              { key: "scope", match: { value: "user" } },
+              { key: "scope", match: { value: "group" } },
+              { key: "scope", match: { value: "global" } }
             ]
           }
         }),
