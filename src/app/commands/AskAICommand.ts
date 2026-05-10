@@ -353,9 +353,13 @@ export class AskAICommand extends CommandInterface {
         ` If you need to send a file, image, video, audio, or document, use send_media().`;
 
       // --- Deep Research Enhancement ---
-      const lastUserMessage = conversationHistory.findLast(m => m.role === "user")?.content || "";
-      const isResearchIntent = /research|deep dive|teliti|analisis mendalam|investigasi|cari tahu seluk beluk|berita terbaru/i.test(lastUserMessage);
-      
+      const lastUserMessage =
+        conversationHistory.findLast((m) => m.role === "user")?.content || "";
+      const isResearchIntent =
+        /research|deep dive|teliti|analisis mendalam|investigasi|cari tahu seluk beluk|berita terbaru/i.test(
+          lastUserMessage,
+        );
+
       let stopWhenSteps = 8;
       if (isResearchIntent) {
         stopWhenSteps = 12;
@@ -367,7 +371,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
 4. **Structured Report**: Synthesize your findings into a comprehensive, well-structured report. Use bolding and lists for readability.
 5. **Citations**: Always include the source URLs you used at the end of your report.
 6. **Efficiency**: You have an increased step limit (12 steps) to complete this investigation.`;
-        
+
         log.info("Deep Research Mode activated for this request (12 steps)");
       }
       // ---------------------------------
@@ -617,7 +621,12 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           : {}),
       };
 
-      const agent = createAskAgent(route, finalSystemPrompt, aiTools, stopWhenSteps);
+      const agent = createAskAgent(
+        route,
+        finalSystemPrompt,
+        aiTools,
+        stopWhenSteps,
+      );
 
       let statusMsgKey: proto.IMessageKey | undefined;
       const toolEmojis: Record<string, string> = {
@@ -661,18 +670,20 @@ You have identified a research-heavy request. Follow these steps for maximum acc
 
           if (calledTools.length > 0) {
             log.info(`Tool calls detected: ${calledTools.join(", ")}`);
-            
+
             // Inform the user about tool usage
             if (jid && sock) {
-              const toolDescriptions = (toolCalls || []).map(call => {
+              const toolDescriptions = (toolCalls || []).map((call) => {
                 const name = call?.toolName || "unknown";
                 const emoji = toolEmojis[name] || "🛠️";
                 // Capitalize and replace underscores
-                const readableName = name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+                const readableName = name
+                  .replace(/_/g, " ")
+                  .replace(/\b\w/g, (l) => l.toUpperCase());
                 return `${emoji} *${readableName}*`;
               });
 
-              const statusText = `🛠️ *AI sedang bekerja:*\n\n${toolDescriptions.join("\n")}${text ? `\n\n_${text.slice(0, 100)}..._` : ""}`;
+              const statusText = `🛠️ *AI sedang bekerja:*\n\n${toolDescriptions.join("\n")}${text ? `\n\n_${text.slice(0, 100).trim()}_` : ""}`;
 
               if (!statusMsgKey) {
                 const sent = await sock.sendMessage(jid, { text: statusText });
