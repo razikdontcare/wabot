@@ -88,6 +88,7 @@ interface QdrantCollectionInfo {
     };
   };
   points_count?: number;
+  payload_schema?: Record<string, unknown>;
 }
 
 export class AIKnowledgeVectorService {
@@ -439,6 +440,34 @@ export class AIKnowledgeVectorService {
     return upsertPoints.length;
   }
 
+  async clearAllKnowledge(): Promise<boolean> {
+    if (!this.isConfigured()) {
+      return false;
+    }
+
+    const collection = encodeURIComponent(BotConfig.qdrantCollection);
+    
+    // Using a match-all filter to delete all points
+    await this.qdrantRequest(
+      `/collections/${collection}/points/delete?wait=true`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filter: {
+            must_not: [
+              {
+                key: "non_existent_field",
+                match: { value: "non_existent_value" }
+              }
+            ]
+          }
+        }),
+      },
+    );
+
+    return true;
+  }
+
   private resolveScope(input: {
     scope?: KnowledgeSearchScope;
     userId?: string;
@@ -733,6 +762,35 @@ export class AIKnowledgeVectorService {
 
     this.collectionReady = true;
     this.collectionVectorSize = existingSize || vectorSize;
+
+    // Ensure payload indexes for filtering
+    await this.ensurePayloadIndexes();
+  }
+
+  private async ensurePayloadIndexes(): Promise<void> {
+    const collection = encodeURIComponent(BotConfig.qdrantCollection);
+    const fieldsToIndex = ["scope", "userId", "groupId", "sourceType", "sourceId"];
+
+    try {
+      // Get current collection info to check existing indexes
+      const info = await this.getCollectionInfo();
+      const existingIndexes = info?.payload_schema ? Object.keys(info.payload_schema) : [];
+
+      for (const field of fieldsToIndex) {
+        if (!existingIndexes.includes(field)) {
+          log.info(`Creating Qdrant payload index for field: ${field}`);
+          await this.qdrantRequest(`/collections/${collection}/index`, {
+            method: "PUT",
+            body: JSON.stringify({
+              field_name: field,
+              field_schema: "keyword",
+            }),
+          });
+        }
+      }
+    } catch (error) {
+      log.error("Failed to ensure Qdrant payload indexes:", error);
+    }
   }
 
   private extractVectorSize(

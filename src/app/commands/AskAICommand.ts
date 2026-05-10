@@ -352,6 +352,26 @@ export class AskAICommand extends CommandInterface {
         ` Always deliver the actual response using reply_message() or send_message().` +
         ` If you need to send a file, image, video, audio, or document, use send_media().`;
 
+      // --- Deep Research Enhancement ---
+      const lastUserMessage = conversationHistory.findLast(m => m.role === "user")?.content || "";
+      const isResearchIntent = /research|deep dive|teliti|analisis mendalam|investigasi|cari tahu seluk beluk|berita terbaru/i.test(lastUserMessage);
+      
+      let stopWhenSteps = 8;
+      if (isResearchIntent) {
+        stopWhenSteps = 12;
+        finalSystemPrompt += `\n\n### DEEP RESEARCH PROTOCOL ACTIVATED
+You have identified a research-heavy request. Follow these steps for maximum accuracy:
+1. **Multi-Source Verification**: Do not rely on a single search result. Compare information from at least 3 different sources.
+2. **Deep Reading**: Use \`web_fetch()\` on at least 2-3 high-quality URLs from search results to understand the context beyond search snippets.
+3. **Fact Checking**: Check for contradictory information. If found, present both sides.
+4. **Structured Report**: Synthesize your findings into a comprehensive, well-structured report. Use bolding and lists for readability.
+5. **Citations**: Always include the source URLs you used at the end of your report.
+6. **Efficiency**: You have an increased step limit (12 steps) to complete this investigation.`;
+        
+        log.info("Deep Research Mode activated for this request (12 steps)");
+      }
+      // ---------------------------------
+
       // Build conversation messages for AI SDK.
       const messages: ModelMessage[] = [];
 
@@ -597,7 +617,7 @@ export class AskAICommand extends CommandInterface {
           : {}),
       };
 
-      const agent = createAskAgent(route, finalSystemPrompt, aiTools, 5);
+      const agent = createAskAgent(route, finalSystemPrompt, aiTools, stopWhenSteps);
 
       let statusMsgKey: proto.IMessageKey | undefined;
       const toolEmojis: Record<string, string> = {
@@ -1045,12 +1065,37 @@ export class AskAICommand extends CommandInterface {
           `• ${BotConfig.prefix}ai kb add [user|group|global] <teks>\n` +
           `• ${BotConfig.prefix}ai kb addurl [user|group|global] <url>\n` +
           `• ${BotConfig.prefix}ai kb delete [user|group|global] <sourceId>\n` +
-          `• ${BotConfig.prefix}ai kb reindex [user|group|global] <sourceId>\n\n` +
+          `• ${BotConfig.prefix}ai kb reindex [user|group|global] <sourceId>\n` +
+          `• ${BotConfig.prefix}ai kb clear (Hanya Admin)\n\n` +
           `Catatan:\n` +
           `- Scope default: *${defaultScope}*\n` +
           `- Scope group hanya bisa dipakai di chat grup\n` +
           `- Operasi tulis scope group/global butuh role admin atau moderator bot`,
       });
+      return;
+    }
+
+    if (action === "clear") {
+      const roles = await getUserRoles(user);
+      if (!roles.includes("admin")) {
+        await sock.sendMessage(jid, {
+          text: "❌ Hanya Admin yang bisa mengosongkan seluruh knowledge base.",
+        });
+        return;
+      }
+
+      try {
+        await this.knowledgeVectorService.clearAllKnowledge();
+        await sock.sendMessage(jid, {
+          text: "✅ Knowledge base berhasil dikosongkan. Semua data Qdrant telah dihapus.",
+        });
+      } catch (error) {
+        log.error("Failed to clear knowledge base:", error);
+        await sock.sendMessage(jid, {
+          text: "Terjadi kesalahan saat mengosongkan knowledge base.",
+        });
+      }
+
       return;
     }
 
