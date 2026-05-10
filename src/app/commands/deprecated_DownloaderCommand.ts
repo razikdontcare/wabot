@@ -285,11 +285,11 @@ ${BotConfig.prefix}downloader_old https://vt.tiktok.com/ZSrG9QPK7/`,
 
               const audioBuffer = Buffer.from(arrayBuffer);
 
-              // Convert MP3 to OGG if needed
-              const oggBuffer = await convertMp3ToOgg(audioBuffer);
-
+              // Convert MP3 to OGG for PTT
+              const oggBuffer = Buffer.from(await convertMp3ToOgg(audioBuffer));
               await sock.sendMessage(jid, {
-                audio: oggBuffer,
+                  audio: oggBuffer,
+
                 mimetype: "audio/mp4",
                 ptt: false,
               });

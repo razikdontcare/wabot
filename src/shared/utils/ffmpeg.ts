@@ -19,7 +19,7 @@ interface ConversionOptions {
  * Converts MP3 buffer to OGG buffer using FFmpeg
  * Executes: ffmpeg -i input.mp3 -avoid_negative_ts make_zero -ac 1 output.ogg
  */
-export async function convertMp3ToOgg(inputBuffer: Buffer, options: ConversionOptions = {}): Promise<Buffer> {
+export async function convertMp3ToOgg(inputBuffer: Uint8Array, options: ConversionOptions = {}): Promise<Uint8Array> {
     const {timeout = 30000, ffmpegPath = 'ffmpeg'} = options;
 
     // Generate unique temporary file names
@@ -30,7 +30,7 @@ export async function convertMp3ToOgg(inputBuffer: Buffer, options: ConversionOp
 
     try {
         // Write input buffer to temporary file
-        await fs.writeFile(inputPath, inputBuffer);
+        await fs.writeFile(inputPath, Buffer.from(inputBuffer));
 
         // Execute FFmpeg command
         await executeFFmpeg(
@@ -40,7 +40,8 @@ export async function convertMp3ToOgg(inputBuffer: Buffer, options: ConversionOp
         );
 
         // Read output buffer
-        return await fs.readFile(outputPath);
+        const result = await fs.readFile(outputPath);
+        return new Uint8Array(result);
     } finally {
         // Clean up temporary files
         await Promise.allSettled([fs.unlink(inputPath).catch(() => {
@@ -54,7 +55,7 @@ export async function convertMp3ToOgg(inputBuffer: Buffer, options: ConversionOp
  * Executes: ffmpeg -i input.mp4 -vn -ar 44100 -ac 2 -b:a 192k output.mp3
  */
 export async function convertVideoToAudio(
-    inputBuffer: Buffer,
+    inputBuffer: Uint8Array,
     options: ConversionOptions & {
         /**
          * Output format: mp3, ogg, wav, m4a (default: mp3)
@@ -65,7 +66,7 @@ export async function convertVideoToAudio(
          */
         bitrate?: string;
     } = {}
-): Promise<Buffer> {
+): Promise<Uint8Array> {
     const {
         timeout = 60000, // Longer timeout for video processing
         ffmpegPath = 'ffmpeg',
@@ -81,7 +82,7 @@ export async function convertVideoToAudio(
 
     try {
         // Write input buffer to temporary file
-        await fs.writeFile(inputPath, inputBuffer);
+        await fs.writeFile(inputPath, Buffer.from(inputBuffer));
 
         // Build FFmpeg arguments for audio extraction
         const args = [
@@ -109,7 +110,8 @@ export async function convertVideoToAudio(
         await executeFFmpeg(ffmpegPath, args, timeout);
 
         // Read output buffer
-        return await fs.readFile(outputPath);
+        const result = await fs.readFile(outputPath);
+        return new Uint8Array(result);
     } finally {
         // Clean up temporary files
         await Promise.allSettled([fs.unlink(inputPath).catch(() => {

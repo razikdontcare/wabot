@@ -3,7 +3,8 @@ import {CommandInfo, CommandInterface} from '../handlers/CommandInterface.js';
 import {BotConfig, log} from '../../infrastructure/config/config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
 import {SessionService} from '../../domain/services/SessionService.js';
-import {convertVideoToAudio} from '../../shared/utils/ffmpeg.js';
+import {WorkerPool} from '../../shared/utils/WorkerPool.js';
+import {join} from 'path';
 
 export class VideoToAudioCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
@@ -114,13 +115,31 @@ Reply video dengan: ${BotConfig.prefix}v2a ogg`,
                 return;
             }
 
-            // Convert video to audio
-            log.info(`Converting video to ${format} audio`);
-            const audioBuffer = await convertVideoToAudio(videoBuffer, {
-                format: format as 'mp3' | 'ogg' | 'wav' | 'm4a',
-                bitrate: '192k',
-                timeout: 120000, // 2 minutes timeout
-            });
+            // Convert video to audio via Worker Pool
+            log.info(`Converting video to ${format} audio via Worker Pool`);
+            
+            const workerPool = WorkerPool.getInstance();
+            const ffmpegPath = () => {
+                if (process.env.NODE_ENV === 'production' || process.env.USE_DIST) {
+                    return join(process.cwd(), "dist", "shared", "utils", "ffmpeg.js");
+                }
+                return join(process.cwd(), "src", "shared", "utils", "ffmpeg.js");
+            };
+
+            const result = await workerPool.run<Uint8Array>(
+                ffmpegPath(),
+                'convertVideoToAudio',
+                [
+                    new Uint8Array(videoBuffer),
+                    {
+                        format: format as 'mp3' | 'ogg' | 'wav' | 'm4a',
+                        bitrate: '192k',
+                        timeout: 120000, // 2 minutes timeout
+                    }
+                ]
+            );
+            
+            const audioBuffer = Buffer.from(result);
 
             log.info(`Conversion complete, audio size: ${audioBuffer.length} bytes`);
 
