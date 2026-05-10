@@ -51,7 +51,7 @@ const RECONNECT_INTERVAL = 3000;
 
 export class BotClient {
   public currentQR: string | null = null; // Store current QR code
-  private sock: WebSocketInfo | null = null;
+  public sock: WebSocketInfo | null = null;
   private commandHandler: CommandHandler;
   private readonly sessionService: SessionService;
   private botId: string | null = null;
@@ -246,11 +246,11 @@ export class BotClient {
           log.info("VIP cleanup scheduler initialized");
 
           // Initialize reminder checker
-          scheduleReminderCheck(this.sock!);
+          scheduleReminderCheck();
           log.info("Reminder checker initialized");
 
           // Initialize free games notifier
-          scheduleFreeGamesNotification(this.sock!);
+          scheduleFreeGamesNotification();
           log.info("Free games notifier initialized");
         }
       });

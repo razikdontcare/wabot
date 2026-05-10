@@ -11,12 +11,32 @@ import {
   GamerPowerGiveaway,
 } from "../../domain/services/FreeGamesService.js";
 import { formatIndonesianDate } from "../../shared/utils/indonesianDateParser.js";
+import { BotClient } from "../../app/client/BotClient.js";
 
 let isFreeGamesSchedulerInitialized = false;
+let isVIPCleanupSchedulerInitialized = false;
+let isReminderSchedulerInitialized = false;
+let isDailyMorningSchedulerInitialized = false;
+
+// Helper to get the current active socket from the global BotClient instance
+function getCurrentSocket(): WebSocketInfo | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bot = (globalThis as any).__botClient as BotClient;
+  return bot?.sock || null;
+}
 
 // Example: Send a "Good morning!" message to all groups every day at 7am
-export async function scheduleDailyMorningMessage(sock: WebSocketInfo) {
+export async function scheduleDailyMorningMessage() {
+  if (isDailyMorningSchedulerInitialized) return;
+  isDailyMorningSchedulerInitialized = true;
+
   cron.schedule("0 7 * * *", async () => {
+    const sock = getCurrentSocket();
+    if (!sock) {
+      log.warn("Skipping daily morning message: No active socket");
+      return;
+    }
+
     const client = await getMongoClient();
     const groupService = new GroupSettingService(client);
     // Fetch all registered group JIDs from the database
@@ -37,6 +57,9 @@ export async function scheduleDailyMorningMessage(sock: WebSocketInfo) {
 
 // VIP cleanup: Runs daily at midnight to clean expired VIPs and codes
 export async function scheduleVIPCleanup() {
+  if (isVIPCleanupSchedulerInitialized) return;
+  isVIPCleanupSchedulerInitialized = true;
+
   cron.schedule("0 0 * * *", async () => {
     try {
       log.info("Running VIP cleanup task...");
@@ -55,8 +78,17 @@ export async function scheduleVIPCleanup() {
 }
 
 // Reminder checker: Runs every minute to check and send due reminders
-export async function scheduleReminderCheck(sock: WebSocketInfo) {
+export async function scheduleReminderCheck() {
+  if (isReminderSchedulerInitialized) return;
+  isReminderSchedulerInitialized = true;
+
   cron.schedule("* * * * *", async () => {
+    const sock = getCurrentSocket();
+    if (!sock) {
+      log.warn("Skipping reminder check: No active socket");
+      return;
+    }
+
     try {
       const mongoClient = await getMongoClient();
       const reminderService = await ReminderService.getInstance(mongoClient);
@@ -101,7 +133,7 @@ export async function scheduleReminderCheck(sock: WebSocketInfo) {
 }
 
 // Free games notifier: Runs every 30 minutes and notifies opted-in groups
-export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
+export async function scheduleFreeGamesNotification() {
   if (isFreeGamesSchedulerInitialized) {
     log.warn(
       "Free games notifier already initialized, skipping duplicate schedule",
@@ -117,6 +149,12 @@ export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
       log.warn(
         "Skipping free games poll because previous run is still in progress",
       );
+      return;
+    }
+
+    const sock = getCurrentSocket();
+    if (!sock) {
+      log.warn("Skipping free games poll: No active socket");
       return;
     }
 
