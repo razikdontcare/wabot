@@ -14,7 +14,7 @@ import { AIConversationService } from "../../domain/services/AIConversationServi
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
 import {
-  generateText,
+  ToolLoopAgent,
   stepCountIs,
   tool as createTool,
   type ModelMessage,
@@ -594,11 +594,12 @@ export class AskAICommand extends CommandInterface {
           : {}),
       };
 
-      const result = await generateText({
+      const agent = new ToolLoopAgent({
+        id: "ask-ai-agent",
         model: route.model,
-        system: finalSystemPrompt,
-        messages,
-        temperature: 0.6,
+        instructions: finalSystemPrompt,
+        tools: aiTools,
+        stopWhen: stepCountIs(5),
         providerOptions:
           route.provider === "google"
             ? {
@@ -609,14 +610,16 @@ export class AskAICommand extends CommandInterface {
                 },
               }
             : undefined,
-        stopWhen: stepCountIs(5),
-        tools: aiTools,
+      });
+
+      const result = await agent.generate({
+        messages,
         onStepFinish: ({ toolCalls }) => {
           log.debug(
             `AI step finished using provider=${route.provider}, model=${route.modelId}`,
           );
 
-          const calledTools = toolCalls
+          const calledTools = (toolCalls || [])
             .map((call) => call?.toolName)
             .filter((name): name is string => Boolean(name));
 
