@@ -101,73 +101,60 @@ export class DownloaderCommand extends CommandInterface {
 
     try {
       // Single yt-dlp process - gets info + downloads file in one go!
-      await sock.sendMessage(jid, {
+      const statusMsg = await sock.sendMessage(jid, {
         text: "🔄 Memulai download...",
       });
 
-      // Track progress for ETA updates
+      // Track progress for live updates
       let lastProgressUpdate = 0;
-      const progressUpdateInterval = 10000; // Update every 10 seconds
-      let isFirstProgress = true;
-      let isUpdating = false; // Prevent race conditions
+      const progressUpdateInterval = 3000; // Update every 3 seconds for smoother feel
+      let isUpdating = false;
+      let progressMessageKey = statusMsg?.key;
 
       // Progress callback function
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const handleProgress = async (progress: any) => {
-        // Validate progress data
-        log.info("Download progress:", progress);
         if (
           !progress ||
           typeof progress.percent !== "number" ||
           typeof progress.speed !== "number"
         ) {
-          log.warn("Invalid progress data received:", progress);
           return;
         }
 
         const now = Date.now();
-        if (now - lastProgressUpdate > progressUpdateInterval && !isUpdating) {
+        // Throttle updates to avoid rate limiting
+        if (now - lastProgressUpdate > progressUpdateInterval && !isUpdating && progressMessageKey) {
           isUpdating = true;
           lastProgressUpdate = now;
 
           try {
             const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
+            const percent = progress.percent.toFixed(1);
+            const progressBar = this.createProgressBar(progress.percent);
+            
+            let text = `📥 *Downloading ${downloadMode.toUpperCase()}*\n\n`;
+            text += `${progressBar} ${percent}%\n\n`;
+            text += `⚡ Speed: ${speedMBps} MB/s\n`;
 
-            if (isFirstProgress) {
-              // First progress update: show full details
-              // Validate totalBytes and eta exist
-              if (
-                progress.totalBytes &&
-                typeof progress.totalBytes === "number"
-              ) {
-                const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
-                const eta = progress.eta || 0;
-                const etaMinutes = Math.floor(eta / 60);
-                const etaSeconds = eta % 60;
-                const etaText =
-                  etaMinutes > 0
-                    ? `${etaMinutes}m ${etaSeconds}s`
-                    : `${etaSeconds}s`;
-
-                await sock.sendMessage(jid, {
-                  text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n📦 Size: ${sizeMB}MB\n⚡ Speed: ${speedMBps} MB/s\n⏱️ ETA: ${etaText}`,
-                });
-                isFirstProgress = false;
-              } else {
-                // Fallback if totalBytes is missing
-                await sock.sendMessage(jid, {
-                  text: `📥 Downloading: ${progress.percent.toFixed(1)}%\n⚡ Speed: ${speedMBps} MB/s`,
-                });
-                isFirstProgress = false;
-              }
-            } else {
-              // Subsequent updates: simplified progress
-              await sock.sendMessage(jid, {
-                text: `📥 Progress: ${progress.percent.toFixed(1)}% | ⚡ ${speedMBps} MB/s`,
-              });
+            if (progress.totalBytes && typeof progress.totalBytes === "number") {
+              const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
+              const eta = progress.eta || 0;
+              const etaMinutes = Math.floor(eta / 60);
+              const etaSeconds = eta % 60;
+              const etaText = etaMinutes > 0 ? `${etaMinutes}m ${etaSeconds}s` : `${etaSeconds}s`;
+              
+              text += `📦 Size: ${sizeMB}MB\n`;
+              text += `⏱️ ETA: ${etaText}`;
             }
+
+            // Edit the existing message
+            await sock.sendMessage(jid, {
+              text: text,
+              edit: progressMessageKey,
+            });
           } catch (error) {
-            log.error("Failed to send progress message:", error);
+            log.warn("Failed to edit progress message (might be rate limited):", error);
           } finally {
             isUpdating = false;
           }
@@ -189,9 +176,13 @@ export class DownloaderCommand extends CommandInterface {
       const durationText = this.formatDuration(videoInfo?.duration || 0);
       const title = videoInfo?.title || "Unknown";
 
-      await sock.sendMessage(jid, {
-        text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
-      });
+      // Final progress update to 100% and then edit to show completion
+      if (progressMessageKey) {
+        await sock.sendMessage(jid, {
+          text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
+          edit: progressMessageKey,
+        });
+      }
 
       if (!response || !response.stream) {
         await sock.sendMessage(jid, {
@@ -287,6 +278,15 @@ export class DownloaderCommand extends CommandInterface {
       await this.handleDownloadError(error, sock, jid);
       return;
     }
+  }
+
+  private createProgressBar(percent: number): string {
+    const size = 10;
+    const progress = Math.round((size * percent) / 100);
+    const emptyProgress = size - progress;
+    const progressText = "█".repeat(progress);
+    const emptyProgressText = "░".repeat(emptyProgress);
+    return `[${progressText}${emptyProgressText}]`;
   }
 
   private async sendWithTimeout(
