@@ -599,9 +599,28 @@ export class AskAICommand extends CommandInterface {
 
       const agent = createAskAgent(route, finalSystemPrompt, aiTools, 5);
 
+      let statusMsgKey: proto.IMessageKey | undefined;
+      const toolEmojis: Record<string, string> = {
+        knowledge_search: "🔍",
+        web_search: "🌐",
+        send_message: "📤",
+        reply_message: "💬",
+        send_media: "🖼️",
+        get_bot_commands: "🤖",
+        get_command_help: "❓",
+        list_files: "📂",
+        read_file: "📄",
+        write_file: "📝",
+        delete_file: "🗑️",
+        update_memory: "🧠",
+        exec_command: "💻",
+        web_fetch: "🌐",
+        execute_bot_command: "⚙️",
+      };
+
       const result = await agent.generate({
         messages,
-        onStepFinish: ({ toolCalls }) => {
+        onStepFinish: async ({ toolCalls, text }) => {
           log.debug(
             `AI step finished using provider=${route.provider}, model=${route.modelId}`,
           );
@@ -616,13 +635,44 @@ export class AskAICommand extends CommandInterface {
             calledTools.includes("send_media")
           ) {
             responseToolUsed = true;
+            // If the AI is sending a final response tool, we can clear/remove the status message
+            // or just leave it. For now, let's keep it until the very end.
           }
 
           if (calledTools.length > 0) {
             log.info(`Tool calls detected: ${calledTools.join(", ")}`);
+            
+            // Inform the user about tool usage
+            if (jid && sock) {
+              const toolDescriptions = (toolCalls || []).map(call => {
+                const name = call?.toolName || "unknown";
+                const emoji = toolEmojis[name] || "🛠️";
+                // Capitalize and replace underscores
+                const readableName = name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+                return `${emoji} *${readableName}*`;
+              });
+
+              const statusText = `🛠️ *AI sedang bekerja:*\n\n${toolDescriptions.join("\n")}${text ? `\n\n_${text.slice(0, 100)}..._` : ""}`;
+
+              if (!statusMsgKey) {
+                const sent = await sock.sendMessage(jid, { text: statusText });
+                statusMsgKey = sent?.key;
+              } else {
+                await sock.sendMessage(jid, {
+                  text: statusText,
+                  edit: statusMsgKey,
+                });
+              }
+            }
           }
         },
       });
+
+      // After generation finishes, if we have a status message, we might want to update it one last time
+      if (statusMsgKey && jid && sock) {
+        // You could either delete it or update it to "Selesai"
+        // Let's just leave it for now, it's a good trace of what happened.
+      }
 
       if (!responseToolUsed) {
         const fallbackResponse = result.text?.trim();
