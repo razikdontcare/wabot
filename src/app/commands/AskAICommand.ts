@@ -13,12 +13,8 @@ import { getMongoClient } from "../../infrastructure/config/mongo.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
-import {
-  generateText,
-  stepCountIs,
-  tool as createTool,
-  type ModelMessage,
-} from "ai";
+import { stepCountIs, tool as createTool, type ModelMessage } from "ai";
+import { createAskAgent } from "../agents/AskAgent.js";
 import { z } from "zod";
 import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
 import {
@@ -439,8 +435,15 @@ export class AskAICommand extends CommandInterface {
           inputSchema: z.object({
             query: z.string().min(1),
             topic: z.enum(["general", "news", "finance"]).optional(),
+            searchDepth: z
+              .enum(["basic", "advanced", "fast", "ultra-fast"])
+              .optional(),
+            includeAnswer: z
+              .union([z.boolean(), z.enum(["basic", "advanced"])])
+              .optional(),
           }),
-          execute: async ({ query, topic }) => web_search(query, topic),
+          execute: async ({ query, topic, searchDepth, includeAnswer }) =>
+            web_search(query, topic, { searchDepth, includeAnswer }),
         }),
         send_message: createTool({
           description:
@@ -594,29 +597,16 @@ export class AskAICommand extends CommandInterface {
           : {}),
       };
 
-      const result = await generateText({
-        model: route.model,
-        system: finalSystemPrompt,
+      const agent = createAskAgent(route, finalSystemPrompt, aiTools, 5);
+
+      const result = await agent.generate({
         messages,
-        temperature: 0.6,
-        providerOptions:
-          route.provider === "google"
-            ? {
-                google: {
-                  thinkingConfig: {
-                    thinkingLevel: "minimal",
-                  },
-                },
-              }
-            : undefined,
-        stopWhen: stepCountIs(5),
-        tools: aiTools,
         onStepFinish: ({ toolCalls }) => {
           log.debug(
             `AI step finished using provider=${route.provider}, model=${route.modelId}`,
           );
 
-          const calledTools = toolCalls
+          const calledTools = (toolCalls || [])
             .map((call) => call?.toolName)
             .filter((name): name is string => Boolean(name));
 
@@ -649,7 +639,21 @@ export class AskAICommand extends CommandInterface {
       return result.text || "Tidak ada jawaban yang diberikan oleh AI.";
     } catch (error) {
       console.error("Error fetching AI completion:", error);
-      return "Terjadi kesalahan saat menghubungi AI.";
+
+      try {
+        const userFacing =
+          "Maaf, terjadi kesalahan saat menghubungi penyedia AI. Silakan coba lagi nanti.";
+
+        if (jid && sock && msg) {
+          await reply_chat_message(userFacing, { jid, sock, msg });
+        } else if (jid && sock) {
+          await sock.sendMessage(jid, { text: userFacing });
+        }
+      } catch (sendErr) {
+        log.error("Failed to notify user about AI provider error:", sendErr);
+      }
+
+      return "";
     }
   }
 

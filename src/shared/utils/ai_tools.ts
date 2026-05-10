@@ -418,6 +418,8 @@ async function resolveMediaSource(
   }
 }
 
+// web_search uses Tavily only.
+
 export async function send_chat_media(
   params: SendMediaParams,
   context: ChatActionContext,
@@ -475,23 +477,30 @@ export async function send_chat_media(
 export async function web_search(
   query: string,
   topic?: "general" | "news" | "finance",
+  options?: {
+    searchDepth?: "basic" | "advanced" | "fast" | "ultra-fast";
+    includeAnswer?: boolean | "basic" | "advanced";
+  },
 ): Promise<string> {
   try {
     log.info(`Performing web search for query: ${query}`);
-    if (!query) {
-      return "Tidak ada query yang diberikan untuk pencarian web.";
-    }
+    if (!query) return "Tidak ada query yang diberikan untuk pencarian web.";
+
+    const searchDepth = options?.searchDepth ?? "advanced";
+    const includeAnswer = options?.includeAnswer ?? true;
+
     const response = await tavilyClient.search(query, {
-      searchDepth: "advanced",
-      includeAnswer: "advanced",
+      searchDepth,
+      includeAnswer,
       topic,
     });
+
     if (response.answer && response.results && response.results.length > 0) {
-      // url, title, and score
       const sources = response.results
-        .map((result) => {
-          return `[${result.title}](${result.url}) (Score: ${result.score})\n${result.content}`;
-        })
+        .map(
+          (result) =>
+            `[${result.title}](${result.url}) (Score: ${result.score})\n${result.content}`,
+        )
         .join("\n\n");
       return `${response.answer}\n\nSumber:\n${sources}`;
     } else if (response.results && response.results.length > 0) {
@@ -500,7 +509,10 @@ export async function web_search(
       return "Tidak ada hasil yang ditemukan.";
     }
   } catch (error) {
-    log.error("Error fetching Tavily search results:", error);
+    log.error(
+      "Error fetching web search results:",
+      error instanceof Error ? error : String(error),
+    );
     return "Terjadi kesalahan saat melakukan pencarian.";
   }
 }

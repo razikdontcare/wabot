@@ -1,6 +1,10 @@
 import { proto } from "baileys";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
-import { BotConfig, getUserRoles } from "../../infrastructure/config/config.js";
+import {
+  BotConfig,
+  getUserRoles,
+  log,
+} from "../../infrastructure/config/config.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { getMongoClient } from "../../infrastructure/config/mongo.js";
@@ -176,26 +180,34 @@ Ketik */freegames reset confirm* untuk melanjutkan.`,
         return;
       }
 
+      const sentGiveaways: GamerPowerGiveaway[] = [];
+
       for (const giveaway of newGiveaways) {
         const targetUrl = await freeGamesService.resolveRedirectLocation(
           giveaway.open_giveaway_url,
         );
-        await sock.sendMessage(jid, {
-          text: formatFreeGamesMessage(giveaway, targetUrl),
-        });
+        try {
+          await sock.sendMessage(jid, {
+            text: formatFreeGamesMessage(giveaway, targetUrl),
+          });
+          sentGiveaways.push(giveaway);
+        } catch (error) {
+          log.error(`Failed to send giveaway ${giveaway.id} to ${jid}:`, error);
+        }
       }
 
-      // Mark delivered giveaways as seen
-      try {
-        await freeGamesService.markGiveawaysSeen(newGiveaways);
-      } catch (err) {
-        // Log but don't fail the command
-
-        console.error("Failed to mark giveaways as seen:", err);
+      // Mark only successfully-sent giveaways as seen
+      if (sentGiveaways.length > 0) {
+        try {
+          await freeGamesService.markGiveawaysSeen(sentGiveaways);
+        } catch (err) {
+          // Log but don't fail the command
+          log.error("Failed to mark giveaways as seen:", err);
+        }
       }
 
       await sock.sendMessage(jid, {
-        text: `${BotConfig.emoji.success} Ditemukan ${newGiveaways.length} giveaway baru.`,
+        text: `${BotConfig.emoji.success} Ditemukan ${newGiveaways.length} giveaway baru (${sentGiveaways.length} berhasil dikirim).`,
       });
       return;
     }

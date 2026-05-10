@@ -28,7 +28,8 @@ export class DownloaderCommand extends CommandInterface {
 
   private ytdl = new YtDlpWrapper();
   private readonly SEND_TIMEOUT = 300000; // 5 minutes timeout
-  private readonly MAX_FILE_SIZE_MB = 100;
+  private readonly MAX_MEDIA_SIZE_MB = 100; // Limit for normal media send
+  private readonly MAX_DOCUMENT_SIZE_MB = 1000; // 1GB absolute limit
 
   async handleCommand(
     args: string[],
@@ -174,22 +175,14 @@ export class DownloaderCommand extends CommandInterface {
       };
 
       // Use optimized download with all speed enhancements and progress tracking
-      // This now uses a SINGLE yt-dlp process that fetches metadata and downloads
-      const response =
-        downloadMode === "audio"
-          ? await this.ytdl.downloadToBuffer(url, {
-              audioOnly: true,
-              useAria2c: false,
-              concurrentFragments: 5,
-              proxy: isTikTok ? process.env.PROXY : undefined,
-              onProgress: handleProgress,
-            })
-          : await this.ytdl.downloadToBuffer(url, {
-              useAria2c: false,
-              concurrentFragments: 5,
-              proxy: isTikTok ? process.env.PROXY : undefined,
-              onProgress: handleProgress,
-            });
+      // This now uses downloadAsStream to save memory by not buffering the entire file
+      const response = await this.ytdl.downloadAsStream(url, {
+        audioOnly: downloadMode === "audio",
+        useAria2c: false,
+        concurrentFragments: 5,
+        proxy: isTikTok ? process.env.PROXY : undefined,
+        onProgress: handleProgress,
+      });
 
       // Extract metadata from response
       const videoInfo = response.metadata;
@@ -200,37 +193,48 @@ export class DownloaderCommand extends CommandInterface {
         text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
       });
 
-      if (!response) {
+      if (!response || !response.stream) {
         await sock.sendMessage(jid, {
           text: "Gagal mengunduh media. Silakan coba lagi.",
         });
         return;
       }
 
-      // Check file size
-      const fileSizeMB = response.buffer.length / (1024 * 1024);
-      if (fileSizeMB > this.MAX_FILE_SIZE_MB) {
+      // Check file size from metadata if available
+      const fileSize = videoInfo?.filesize || videoInfo?.filesize_approx || 0;
+      const fileSizeMB = fileSize / (1024 * 1024);
+
+      if (fileSize > 0 && fileSizeMB > this.MAX_DOCUMENT_SIZE_MB) {
         await sock.sendMessage(jid, {
-          text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal ${this.MAX_FILE_SIZE_MB}MB.`,
+          text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal limit bot adalah ${this.MAX_DOCUMENT_SIZE_MB}MB.`,
         });
+        // Destroy the stream to stop download
+        response.stream.destroy();
         return;
       }
 
-      await sock.sendMessage(jid, {
-        text: `📤 Mengirim ${downloadMode} (${fileSizeMB.toFixed(1)}MB)...`,
-      });
+      // Automatically switch to document mode if file is too large for standard media
+      if (fileSizeMB > this.MAX_MEDIA_SIZE_MB && !sendAsDocument) {
+        sendAsDocument = true;
+        await sock.sendMessage(jid, {
+          text: `ℹ️ Ukuran file (${fileSizeMB.toFixed(1)}MB) melebihi batas media WA (100MB). Mengalihkan pengiriman sebagai *dokumen*...`,
+        });
+      }
 
+      await sock.sendMessage(jid, {
+        text: `📤 Mengirim ${downloadMode}${fileSizeMB > 0 ? ` (${fileSizeMB.toFixed(1)}MB)` : ""}...`,
+      });
       if (downloadMode === "audio") {
         try {
           if (sendAsDocument) {
             await this.sendWithTimeout(sock, jid, {
-              document: response.buffer,
+              document: { stream: response.stream },
               mimetype: "audio/mp3",
               fileName: this.normalizeFilename(title) + ".mp3",
             });
           } else {
             await this.sendWithTimeout(sock, jid, {
-              audio: response.buffer,
+              audio: { stream: response.stream },
               mimetype: "audio/mp4",
               fileName: this.normalizeFilename(title) + ".mp3",
             });
@@ -245,8 +249,7 @@ export class DownloaderCommand extends CommandInterface {
       } else {
         try {
           // Send a status message for large videos
-          if (response.buffer.length > 50 * 1024 * 1024) {
-            // 50MB
+          if (fileSizeMB > 50) {
             await sock.sendMessage(jid, {
               text: "Mengirim video besar, mohon tunggu maksimal 5 menit.",
             });
@@ -254,13 +257,13 @@ export class DownloaderCommand extends CommandInterface {
 
           if (sendAsDocument) {
             await this.sendWithTimeout(sock, jid, {
-              document: response.buffer,
+              document: { stream: response.stream },
               mimetype: "video/mp4",
               fileName: this.normalizeFilename(title) + ".mp4",
             });
           } else {
             await this.sendWithTimeout(sock, jid, {
-              video: response.buffer,
+              video: { stream: response.stream },
               mimetype: "video/mp4",
               fileName: this.normalizeFilename(title) + ".mp4",
             });

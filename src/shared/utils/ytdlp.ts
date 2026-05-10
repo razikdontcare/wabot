@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { Readable } from 'stream';
 
 interface YtDlpOptions {
     cookiesFile?: string;
@@ -36,6 +37,13 @@ interface YtDlpOptions {
 
 interface YtDlpResult {
     buffer: Buffer;
+    filename: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    metadata?: any;
+}
+
+interface YtDlpStreamResult {
+    stream: Readable;
     filename: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     metadata?: any;
@@ -240,6 +248,62 @@ export class YtDlpWrapper {
             await this.cleanupTempFiles(tempDir, tempId);
             throw new Error(`yt-dlp failed: ${error}`);
         }
+    }
+
+    /**
+     * Download video or audio as stream with optimized performance.
+     * This saves memory by not buffering the entire file.
+     *
+     * @param url - Video URL to download
+     * @param options - Download options
+     * @returns Promise with stream, suggested filename and metadata
+     */
+    async downloadAsStream(url: string, options: YtDlpOptions = {}): Promise<YtDlpStreamResult> {
+        // 1. Get metadata first for validation and filename
+        const metadata = options.videoInfo || await this.getVideoInfo(url, options);
+
+        // Check duration limit
+        if (metadata.duration && metadata.duration > this.MAX_DURATION) {
+            throw new Error(
+                `Video too long: ${Math.round(metadata.duration / 60)} minutes (max: ${this.MAX_DURATION / 60} minutes)`
+            );
+        }
+
+        // Check if it's a live stream
+        if (metadata.is_live) {
+            throw new Error('Live streams are not supported');
+        }
+
+        // Suggested filename
+        const ext = options.audioOnly ? 'mp3' : 'mp4';
+        const filename = `${metadata.title || 'download'}.${ext}`;
+
+        // 2. Build command arguments for streaming to stdout
+        const streamOptions = { ...options, streamToStdout: true };
+        const args = this.buildArgs(url, '-', streamOptions, !!options.onProgress);
+
+        // 3. Spawn process
+        const process = spawn(args[0], args.slice(1), {
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        // Parse progress from stderr (stdout is used for media)
+        if (options.onProgress) {
+            process.stderr?.on('data', (data) => {
+                this.parseProgress(data.toString(), options.onProgress!);
+            });
+        }
+
+        // Handle process errors
+        process.on('error', (error) => {
+            console.error('yt-dlp process error:', error);
+        });
+
+        return {
+            stream: process.stdout,
+            filename,
+            metadata,
+        };
     }
 
     // Convenience method for your specific command

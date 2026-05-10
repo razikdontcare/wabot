@@ -143,14 +143,20 @@ export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
         return;
       }
 
+      // Track which giveaways were successfully sent to at least one group
+      const successfullySentIds = new Set<number>();
+
       for (const giveaway of newGiveaways) {
         const targetUrl = await freeGamesService.resolveRedirectLocation(
           giveaway.open_giveaway_url,
         );
         const message = formatFreeGamesMessage(giveaway, targetUrl);
+        let sentToAtLeastOneGroup = false;
+
         for (const groupJid of targetGroups) {
           try {
             await sock.sendMessage(groupJid, { text: message });
+            sentToAtLeastOneGroup = true;
           } catch (error) {
             log.error(
               `Failed to send free games notification to ${groupJid}:`,
@@ -158,13 +164,29 @@ export async function scheduleFreeGamesNotification(sock: WebSocketInfo) {
             );
           }
         }
+
+        if (sentToAtLeastOneGroup) {
+          successfullySentIds.add(giveaway.id);
+        }
       }
 
-      // Persist seen giveaways only after attempting to send them
-      try {
-        await freeGamesService.markGiveawaysSeen(newGiveaways);
-      } catch (err) {
-        log.error("Failed to mark giveaways as seen:", err);
+      // Mark only successfully-sent giveaways as seen
+      const successfullySent = newGiveaways.filter((g) =>
+        successfullySentIds.has(g.id),
+      );
+      if (successfullySent.length > 0) {
+        try {
+          await freeGamesService.markGiveawaysSeen(successfullySent);
+          log.info(
+            `[Scheduler] Marked ${successfullySent.length} successfully-sent giveaway(s) as seen`,
+          );
+        } catch (err) {
+          log.error("Failed to mark giveaways as seen:", err);
+        }
+      } else {
+        log.warn(
+          `[Scheduler] No giveaways were successfully sent to any group; will retry on next poll`,
+        );
       }
 
       log.info(
