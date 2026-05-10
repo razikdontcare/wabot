@@ -1,4 +1,10 @@
-import { readFileSync, writeFileSync, readdirSync, unlinkSync, existsSync } from "fs";
+import {
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  unlinkSync,
+  existsSync,
+} from "fs";
 import { join, resolve } from "path";
 import { exec } from "child_process";
 import { log } from "../../infrastructure/config/config.js";
@@ -19,13 +25,21 @@ const ROOT_DIR = process.cwd() + "/workspaces/";
 const responseCache = new NodeCache({ stdTTL: 300, useClones: false }); // 5 minutes TTL
 const robotsCache = new NodeCache({ stdTTL: 3600, useClones: false }); // 1 hour TTL
 
+// Minimal robots parser interface used by the agent tools
+type Robots = {
+  isDisallowed(href: string, userAgent?: string): boolean;
+  getCrawlDelay(userAgent?: string): number | undefined;
+};
+
 /**
  * Validates that a path is within the allowed ROOT_DIR
  */
 function validatePath(filePath: string): string {
   const resolvedPath = resolve(ROOT_DIR, filePath);
   if (!resolvedPath.startsWith(ROOT_DIR)) {
-    throw new Error(`Access denied: ${filePath} is outside the root directory.`);
+    throw new Error(
+      `Access denied: ${filePath} is outside the root directory.`,
+    );
   }
   return resolvedPath;
 }
@@ -35,9 +49,11 @@ export async function list_files(path: string = "."): Promise<string> {
     const targetPath = validatePath(path);
     const files = readdirSync(targetPath, { withFileTypes: true });
 
-    const fileList = files.map(file => {
-      return `${file.isDirectory() ? "[DIR]" : "[FILE]"} ${file.name}`;
-    }).join("\n");
+    const fileList = files
+      .map((file) => {
+        return `${file.isDirectory() ? "[DIR]" : "[FILE]"} ${file.name}`;
+      })
+      .join("\n");
 
     return `Files in ${path}:\n${fileList || "(empty)"}`;
   } catch (error) {
@@ -65,7 +81,10 @@ export async function read_file(path: string): Promise<string> {
   }
 }
 
-export async function write_file(path: string, content: string): Promise<string> {
+export async function write_file(
+  path: string,
+  content: string,
+): Promise<string> {
   try {
     const targetPath = validatePath(path);
     writeFileSync(targetPath, content, "utf-8");
@@ -93,12 +112,17 @@ export async function delete_file(path: string): Promise<string> {
 /**
  * Specialized tool for managing MEMORY.md
  */
-export async function update_memory(content: string, mode: "append" | "overwrite" = "append"): Promise<string> {
+export async function update_memory(
+  content: string,
+  mode: "append" | "overwrite" = "append",
+): Promise<string> {
   const memoryFile = "MEMORY.md";
   try {
     const targetPath = validatePath(memoryFile);
     if (mode === "append") {
-      const existing = existsSync(targetPath) ? readFileSync(targetPath, "utf-8") : "";
+      const existing = existsSync(targetPath)
+        ? readFileSync(targetPath, "utf-8")
+        : "";
       const separator = existing.length > 0 ? "\n\n---\n\n" : "";
       const timestamp = new Date().toLocaleString();
       const newContent = `${existing}${separator}### Memory Entry (${timestamp})\n${content}`;
@@ -118,10 +142,14 @@ export async function exec_command(command: string): Promise<string> {
     // We execute in the root directory
     exec(command, { cwd: ROOT_DIR }, (error, stdout, stderr) => {
       if (error) {
-        resolve(`Command failed with error: ${error.message}\nStderr: ${stderr}`);
+        resolve(
+          `Command failed with error: ${error.message}\nStderr: ${stderr}`,
+        );
         return;
       }
-      resolve(stdout || stderr || "Command executed successfully with no output.");
+      resolve(
+        stdout || stderr || "Command executed successfully with no output.",
+      );
     });
   });
 }
@@ -149,7 +177,7 @@ function isPrivateIP(ipStr: string): boolean {
 /** Helper to check SSRF by resolving hostname */
 async function checkSSRF(urlObj: URL): Promise<void> {
   const hostname = urlObj.hostname;
-  
+
   if (ipaddr.isValid(hostname)) {
     if (isPrivateIP(hostname)) {
       throw new Error(`SSRF Blocked: IP ${hostname} is private/restricted.`);
@@ -160,29 +188,45 @@ async function checkSSRF(urlObj: URL): Promise<void> {
   try {
     const records = await dns.lookup(hostname);
     if (isPrivateIP(records.address)) {
-      throw new Error(`SSRF Blocked: Hostname ${hostname} resolves to private IP ${records.address}.`);
+      throw new Error(
+        `SSRF Blocked: Hostname ${hostname} resolves to private IP ${records.address}.`,
+      );
     }
   } catch (err) {
-    throw new Error(`Failed to resolve hostname ${hostname}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(
+      `Failed to resolve hostname ${hostname}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
 /** Helper to fetch and check robots.txt */
-async function checkRobotsTxt(urlObj: URL, userAgent: string = "WhatsAppFunBot/1.0"): Promise<void> {
+async function checkRobotsTxt(
+  urlObj: URL,
+  userAgent: string = "WhatsAppFunBot/1.0",
+): Promise<void> {
   const origin = urlObj.origin;
   const robotsUrl = `${origin}/robots.txt`;
-  
-  let robots = robotsCache.get<any>(origin);
-  
+
+  let robots = robotsCache.get<Robots>(origin);
+  const parseRobots = robotsParser as unknown as (
+    url: string,
+    txt: string,
+  ) => Robots;
+
   if (!robots) {
     try {
-      const res = await fetch(robotsUrl, { redirect: "follow", timeout: 5000 } as any);
+      const fetchOptions: RequestInit & { timeout?: number } = {
+        redirect: "follow",
+        // some runtimes support a timeout on fetch options
+        timeout: 5000,
+      };
+      const res = await fetch(robotsUrl, fetchOptions);
       const text = res.ok ? await res.text() : "";
-      robots = (robotsParser as any)(robotsUrl, text);
+      robots = parseRobots(robotsUrl, text);
       robotsCache.set(origin, robots);
     } catch (err) {
       log.debug(`Failed to fetch robots.txt for ${origin}, assuming allowed.`);
-      robots = (robotsParser as any)(robotsUrl, "");
+      robots = parseRobots(robotsUrl, "");
       robotsCache.set(origin, robots);
     }
   }
@@ -194,9 +238,11 @@ async function checkRobotsTxt(urlObj: URL, userAgent: string = "WhatsAppFunBot/1
   const crawlDelay = robots.getCrawlDelay(userAgent);
   if (crawlDelay) {
     if (crawlDelay > 5) {
-      throw new Error(`Crawl-delay too long (${crawlDelay}s) for ${urlObj.href}`);
+      throw new Error(
+        `Crawl-delay too long (${crawlDelay}s) for ${urlObj.href}`,
+      );
     }
-    await new Promise(resolve => setTimeout(resolve, crawlDelay * 1000));
+    await new Promise((resolve) => setTimeout(resolve, crawlDelay * 1000));
   }
 }
 
@@ -213,13 +259,13 @@ export async function web_fetch(
   url: string,
   options: WebFetchOptions = {},
 ): Promise<string> {
-  const { 
-    method = "GET", 
-    headers = {}, 
-    body, 
+  const {
+    method = "GET",
+    headers = {},
+    body,
     timeout = 30000,
     allowList,
-    blockList 
+    blockList,
   } = options;
 
   let currentUrl = url;
@@ -268,7 +314,7 @@ export async function web_fetch(
         method,
         headers: {
           "User-Agent": "WhatsAppFunBot/1.0",
-          ...headers
+          ...headers,
         },
         body: body ?? undefined,
         signal: controller.signal,
@@ -282,40 +328,52 @@ export async function web_fetch(
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get("location");
         if (!location) {
-          throw new Error(`Redirect status ${response.status} but no location header.`);
+          throw new Error(
+            `Redirect status ${response.status} but no location header.`,
+          );
         }
-        
+
         // Resolve relative URLs
         const nextUrl = new URL(location, currentUrl).href;
-        
+
         if (redirectChain.has(nextUrl)) {
           throw new Error(`Infinite redirect loop detected at ${nextUrl}`);
         }
-        
+
         if (redirectCount >= maxRedirects) {
           throw new Error(`Maximum redirect limit (${maxRedirects}) reached.`);
         }
-        
+
         redirectChain.add(currentUrl);
         currentUrl = nextUrl;
         redirectCount++;
-        
+
         // Follow redirect by retrying the loop immediately (not an exponential backoff retry)
-        attempt = -1; 
+        attempt = -1;
         continue;
       }
 
       if (!response.ok) {
         // Transient errors for backoff
-        if ([408, 429, 500, 502, 503, 504].includes(response.status) && attempt < maxRetries) {
-           throw new Error(`Transient error: ${response.status} ${response.statusText}`);
+        if (
+          [408, 429, 500, 502, 503, 504].includes(response.status) &&
+          attempt < maxRetries
+        ) {
+          throw new Error(
+            `Transient error: ${response.status} ${response.statusText}`,
+          );
         }
         return `Failed to fetch ${currentUrl}: ${response.status} ${response.statusText}`;
       }
 
       // Binary Type Rejection
       const contentType = response.headers.get("content-type") || "";
-      if (contentType && !contentType.includes("text/") && !contentType.includes("application/json") && !contentType.includes("application/xml")) {
+      if (
+        contentType &&
+        !contentType.includes("text/") &&
+        !contentType.includes("application/json") &&
+        !contentType.includes("application/xml")
+      ) {
         return `Error: Rejected binary content type (${contentType}).`;
       }
 
@@ -323,9 +381,8 @@ export async function web_fetch(
       const MAX_SIZE = 5 * 1024 * 1024;
       let size = 0;
       const chunks: Uint8Array[] = [];
-      
+
       if (response.body) {
-        // @ts-ignore: Web ReadableStream as AsyncIterable (Node 18+)
         for await (const chunk of response.body) {
           chunks.push(chunk as Uint8Array);
           size += (chunk as Uint8Array).length;
@@ -335,7 +392,7 @@ export async function web_fetch(
           }
         }
       }
-      
+
       const buffer = Buffer.concat(chunks);
 
       // Charset decoding
@@ -345,8 +402,14 @@ export async function web_fetch(
         charset = match[1].toLowerCase();
       } else {
         // Fallback: try to find it in the HTML meta tag
-        const partialHtml = buffer.toString("utf8", 0, Math.min(buffer.length, 1024));
-        const metaMatch = partialHtml.match(/<meta[^>]+charset=['"]?([^>'"\s]+)['"]?/i);
+        const partialHtml = buffer.toString(
+          "utf8",
+          0,
+          Math.min(buffer.length, 1024),
+        );
+        const metaMatch = partialHtml.match(
+          /<meta[^>]+charset=['"]?([^>'"\s]+)['"]?/i,
+        );
         if (metaMatch) charset = metaMatch[1].toLowerCase();
       }
 
@@ -373,48 +436,67 @@ export async function web_fetch(
 
       // HTML Parsing and Markdown Conversion
       const root = parse(text);
-      
+
       // Extract Metadata
       const metadata: Record<string, string> = {};
       const titleNode = root.querySelector("title");
       if (titleNode) metadata["Title"] = titleNode.text.trim();
-      
+
       const metas = root.querySelectorAll("meta");
       for (const meta of metas) {
         const name = meta.getAttribute("name") || meta.getAttribute("property");
         const content = meta.getAttribute("content");
         if (name && content) {
-          if (["description", "keywords", "author", "article:published_time"].includes(name.toLowerCase()) || name.toLowerCase().startsWith("og:") || name.toLowerCase().startsWith("twitter:")) {
-             metadata[name] = content.trim();
+          if (
+            [
+              "description",
+              "keywords",
+              "author",
+              "article:published_time",
+            ].includes(name.toLowerCase()) ||
+            name.toLowerCase().startsWith("og:") ||
+            name.toLowerCase().startsWith("twitter:")
+          ) {
+            metadata[name] = content.trim();
           }
         }
       }
-      
+
       const canonical = root.querySelector('link[rel="canonical"]');
-      if (canonical) metadata["Canonical"] = canonical.getAttribute("href") || "";
+      if (canonical)
+        metadata["Canonical"] = canonical.getAttribute("href") || "";
 
       // Extract Links
       const linksNode = root.querySelectorAll("a");
-      const links = linksNode.slice(0, 50).map(a => {
-        return `[${a.text.trim() || 'link'}](${a.getAttribute("href") || ''}) ${a.getAttribute("rel") ? `rel="${a.getAttribute("rel")}"` : ''}`;
-      }).filter(l => l !== "[link]() " && l !== "[link]()");
+      const links = linksNode
+        .slice(0, 50)
+        .map((a) => {
+          return `[${a.text.trim() || "link"}](${a.getAttribute("href") || ""}) ${a.getAttribute("rel") ? `rel="${a.getAttribute("rel")}"` : ""}`;
+        })
+        .filter((l) => l !== "[link]() " && l !== "[link]()");
 
       // Extract Images
       const imgsNode = root.querySelectorAll("img");
-      const images = imgsNode.slice(0, 20).map(img => {
-        return `![${img.getAttribute("alt") || ''}](${img.getAttribute("src") || ''})`;
-      }).filter(i => i !== "![](null)" && i !== "![]()");
+      const images = imgsNode
+        .slice(0, 20)
+        .map((img) => {
+          return `![${img.getAttribute("alt") || ""}](${img.getAttribute("src") || ""})`;
+        })
+        .filter((i) => i !== "![](null)" && i !== "![]()");
 
       // Remove scripts and styles before Markdown conversion
-      root.querySelectorAll('script, style, noscript, iframe, svg').forEach(el => el.remove());
-      
+      root
+        .querySelectorAll("script, style, noscript, iframe, svg")
+        .forEach((el) => el.remove());
+
       // Convert to Markdown
       const nhm = new NodeHtmlMarkdown();
       let markdown = nhm.translate(root.innerHTML);
 
       // Token budget truncation (20k chars)
       if (markdown.length > 20000) {
-        markdown = markdown.substring(0, 20000) + "\n\n[... content truncated ...]";
+        markdown =
+          markdown.substring(0, 20000) + "\n\n[... content truncated ...]";
       }
 
       // Format output
@@ -423,7 +505,7 @@ export async function web_fetch(
         finalOutput += `- **${k}**: ${v}\n`;
       }
       finalOutput += `\n# Content\n${markdown}\n`;
-      
+
       if (links.length > 0) {
         finalOutput += `\n# Extracted Links (Top ${links.length})\n${links.join("\n")}\n`;
       }
@@ -436,24 +518,34 @@ export async function web_fetch(
       }
 
       return finalOutput;
-      
-    } catch (error: any) {
-      lastError = error as Error;
-      if (error instanceof Error && error.name === "AbortError") {
-        lastError = new Error(`Request timed out after ${timeout}ms`);
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        lastError = error;
+        if (error.name === "AbortError") {
+          lastError = new Error(`Request timed out after ${timeout}ms`);
+        }
+      } else {
+        lastError = new Error(String(error));
       }
-      
-      const isTransient = error instanceof Error && (error.message.includes("Transient error") || error.message.includes("ECONNRESET") || error.message.includes("ETIMEDOUT") || error.message.includes("fetch failed"));
-      
+
+      const isTransient =
+        lastError !== null &&
+        (lastError.message.includes("Transient error") ||
+          lastError.message.includes("ECONNRESET") ||
+          lastError.message.includes("ETIMEDOUT") ||
+          lastError.message.includes("fetch failed"));
+
       if (isTransient && attempt < maxRetries) {
         const baseDelay = 1000;
         const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-        log.warn(`Transient error fetching ${currentUrl}. Retrying in ${Math.round(delay)}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        log.warn(
+          `Transient error fetching ${currentUrl}. Retrying in ${Math.round(delay)}ms...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
-      
-      break; 
+
+      break;
     }
   }
 

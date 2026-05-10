@@ -70,8 +70,7 @@ export const BotConfig = {
   aiModelGroq:
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
   aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
-  aiModelOpenRouter:
-    process.env.AI_MODEL_OPENROUTER || "openrouter/owl-alpha",
+  aiModelOpenRouter: process.env.AI_MODEL_OPENROUTER || "openrouter/owl-alpha",
   aiMultimodalModelGoogle:
     process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiEmbeddingModelGoogle:
