@@ -99,10 +99,6 @@ export class YtDlpWrapper {
             'node',
         ];
 
-        // Add user agent for TikTok
-        if (this.isTikTokUrl(url)) {
-            args.push('--user-agent', 'curl/8.5.0');
-        }
 
         // Add proxy if specified
         if (options.proxy) {
@@ -370,10 +366,6 @@ export class YtDlpWrapper {
 
         args.push('--js-runtimes', 'node');
 
-        // Add user agent for TikTok
-        if (this.isTikTokUrl(url)) {
-            args.push('--user-agent', 'curl/8.5.0');
-        }
 
         // Add proxy if specified
         if (options.proxy) {
