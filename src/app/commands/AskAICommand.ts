@@ -356,7 +356,7 @@ export class AskAICommand extends CommandInterface {
       const lastUserMessage =
         conversationHistory.findLast((m) => m.role === "user")?.content || "";
       const isResearchIntent =
-        /research|deep dive|teliti|analisis mendalam|investigasi|cari tahu seluk beluk|berita terbaru/i.test(
+        /research|deep dive|teliti|analisis mendalam|investigasi|cari tahu seluk beluk|berita terbaru|carikan/i.test(
           lastUserMessage,
         );
 

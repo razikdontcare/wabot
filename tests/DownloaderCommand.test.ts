@@ -20,13 +20,16 @@ describe("DownloaderCommand", () => {
       filesize: 150 * 1024 * 1024, // 150MB
     };
 
-    // Mock ytdl.downloadAsStream
     const mockStream = new Readable({ read() { this.push(null); } });
+
+    // Mock ytdl methods
     (command as any).ytdl = {
+      getVideoInfo: mock(async () => largeMetadata),
       downloadAsStream: mock(async () => ({
         stream: mockStream,
         metadata: largeMetadata,
-        filename: "Huge Movie.mp4"
+        filename: "Huge Movie.mp4",
+        wait: async () => {}
       }))
     };
 
@@ -67,10 +70,12 @@ describe("DownloaderCommand", () => {
     mockStream.destroy = mock(() => (mockStream as any));
     
     (command as any).ytdl = {
+      getVideoInfo: mock(async () => monsterMetadata),
       downloadAsStream: mock(async () => ({
         stream: mockStream,
         metadata: monsterMetadata,
-        filename: "Monster.mp4"
+        filename: "Monster.mp4",
+        wait: async () => {}
       }))
     };
 

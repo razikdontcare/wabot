@@ -100,16 +100,21 @@ export class DownloaderCommand extends CommandInterface {
     }
 
     try {
-      // Single yt-dlp process - gets info + downloads file in one go!
+      // Step 1: Initial status - Fetching metadata
       const statusMsg = await sock.sendMessage(jid, {
-        text: "🔄 Memulai download...",
+        text: "🔍 Mengambil informasi media...",
       });
+      const progressMessageKey = statusMsg?.key;
 
       // Track progress for live updates
       let lastProgressUpdate = 0;
-      const progressUpdateInterval = 3000; // Update every 3 seconds for smoother feel
+      const progressUpdateInterval = 3000;
       let isUpdating = false;
-      let progressMessageKey = statusMsg?.key;
+
+      // Fetch metadata first (fast)
+      const videoInfo = await this.ytdl.getVideoInfo(url, {
+          proxy: isTikTok ? process.env.PROXY : undefined,
+      });
 
       // Progress callback function
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,7 +137,7 @@ export class DownloaderCommand extends CommandInterface {
             const speedMBps = (progress.speed / (1024 * 1024)).toFixed(2);
             const percent = progress.percent.toFixed(1);
             const progressBar = this.createProgressBar(progress.percent);
-            
+
             let text = `📥 *Downloading ${downloadMode.toUpperCase()}*\n\n`;
             text += `${progressBar} ${percent}%\n\n`;
             text += `⚡ Speed: ${speedMBps} MB/s\n`;
@@ -143,7 +148,7 @@ export class DownloaderCommand extends CommandInterface {
               const etaMinutes = Math.floor(eta / 60);
               const etaSeconds = eta % 60;
               const etaText = etaMinutes > 0 ? `${etaMinutes}m ${etaSeconds}s` : `${etaSeconds}s`;
-              
+
               text += `📦 Size: ${sizeMB}MB\n`;
               text += `⏱️ ETA: ${etaText}`;
             }
@@ -154,35 +159,30 @@ export class DownloaderCommand extends CommandInterface {
               edit: progressMessageKey,
             });
           } catch (error) {
-            log.warn("Failed to edit progress message (might be rate limited):", error);
+            log.warn("Failed to edit progress message:", error);
           } finally {
             isUpdating = false;
           }
         }
       };
 
-      // Use optimized download with all speed enhancements and progress tracking
-      // This now uses downloadAsStream to save memory by not buffering the entire file
+      // Edit status to indicate download starting
+      if (progressMessageKey) {
+          await sock.sendMessage(jid, {
+              text: "🔄 Memulai download...",
+              edit: progressMessageKey,
+          });
+      }
+
+      // Step 2: Download stream (using pre-fetched metadata for efficiency)
       const response = await this.ytdl.downloadAsStream(url, {
         audioOnly: downloadMode === "audio",
         useAria2c: false,
         concurrentFragments: 5,
         proxy: isTikTok ? process.env.PROXY : undefined,
         onProgress: handleProgress,
+        videoInfo: videoInfo,
       });
-
-      // Extract metadata from response
-      const videoInfo = response.metadata;
-      const durationText = this.formatDuration(videoInfo?.duration || 0);
-      const title = videoInfo?.title || "Unknown";
-
-      // Final progress update to 100% and then edit to show completion
-      if (progressMessageKey) {
-        await sock.sendMessage(jid, {
-          text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
-          edit: progressMessageKey,
-        });
-      }
 
       if (!response || !response.stream) {
         await sock.sendMessage(jid, {
@@ -191,7 +191,10 @@ export class DownloaderCommand extends CommandInterface {
         return;
       }
 
-      // Check file size from metadata if available
+      const durationText = this.formatDuration(videoInfo?.duration || 0);
+      const title = videoInfo?.title || "Unknown";
+
+      // Check file size
       const fileSize = videoInfo?.filesize || videoInfo?.filesize_approx || 0;
       const fileSizeMB = fileSize / (1024 * 1024);
 
@@ -199,12 +202,11 @@ export class DownloaderCommand extends CommandInterface {
         await sock.sendMessage(jid, {
           text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal limit bot adalah ${this.MAX_DOCUMENT_SIZE_MB}MB.`,
         });
-        // Destroy the stream to stop download
         response.stream.destroy();
         return;
       }
 
-      // Automatically switch to document mode if file is too large for standard media
+      // Automatically switch to document mode
       if (fileSizeMB > this.MAX_MEDIA_SIZE_MB && !sendAsDocument) {
         sendAsDocument = true;
         await sock.sendMessage(jid, {
@@ -215,6 +217,8 @@ export class DownloaderCommand extends CommandInterface {
       await sock.sendMessage(jid, {
         text: `📤 Mengirim ${downloadMode}${fileSizeMB > 0 ? ` (${fileSizeMB.toFixed(1)}MB)` : ""}...`,
       });
+
+      // Step 3: Send to WhatsApp
       if (downloadMode === "audio") {
         try {
           if (sendAsDocument) {
@@ -236,10 +240,8 @@ export class DownloaderCommand extends CommandInterface {
             text: "Gagal mengirim audio. File mungkin terlalu besar atau koneksi timeout.",
           });
         }
-        return;
       } else {
         try {
-          // Send a status message for large videos
           if (fileSizeMB > 50) {
             await sock.sendMessage(jid, {
               text: "Mengirim video besar, mohon tunggu maksimal 5 menit.",
@@ -271,9 +273,21 @@ export class DownloaderCommand extends CommandInterface {
             });
           }
         }
-        return;
       }
+
+      // Wait for clean exit
+      await response.wait().catch(e => log.warn("yt-dlp wait error:", e));
+
+      // Final Step: Edit status message to completed
+      if (progressMessageKey) {
+        await sock.sendMessage(jid, {
+          text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
+          edit: progressMessageKey,
+        });
+      }
+      return;
     } catch (error) {
+
       log.error("Download failed:", error);
       await this.handleDownloadError(error, sock, jid);
       return;

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
+import { log } from '../../infrastructure/config/config.js';
 
 interface YtDlpOptions {
     cookiesFile?: string;
@@ -47,6 +48,8 @@ interface YtDlpStreamResult {
     filename: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     metadata?: any;
+    // Promise that resolves when the process closes
+    wait: () => Promise<void>;
 }
 
 interface DownloadProgress {
@@ -292,13 +295,26 @@ export class YtDlpWrapper {
 
         // Handle process errors
         process.on('error', (error) => {
-            console.error('yt-dlp process error:', error);
+            log.error('yt-dlp process error:', error);
+        });
+
+        // Create a promise that resolves when the process closes
+        const wait = () => new Promise<void>((resolve, reject) => {
+            process.on('close', (code) => {
+                if (code === 0) resolve();
+                else reject(new Error(`yt-dlp exited with code ${code}`));
+            });
+            process.on('error', reject);
+            
+            // Safety timeout for the wait
+            setTimeout(() => reject(new Error('Wait timeout')), this.DOWNLOAD_TIMEOUT);
         });
 
         return {
             stream: process.stdout,
             filename,
             metadata,
+            wait
         };
     }
 
@@ -394,19 +410,20 @@ export class YtDlpWrapper {
             args.push('-o', outputTemplate);
         }
 
-        // Enhanced format selection - prefer pre-muxed formats to avoid ffmpeg merging
+        // Enhanced format selection - prefer H.264 (avc1) and AAC for WhatsApp compatibility
         if (options.format) {
             args.push('-f', options.format);
         } else if (options.audioOnly) {
             // Priority: m4a > mp3 > any audio (m4a is pre-muxed)
             args.push('-f', 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best');
         } else {
-            // Prefer pre-muxed mp4 formats to avoid ffmpeg remuxing overhead
+            // Prefer pre-muxed mp4 formats with avc1 (H.264) to avoid VP9 (unsupported on many WA clients)
             const videoFormats = [
+                'best[vcodec^=avc1][ext=mp4][height<=1080]',
+                'bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[ext=m4a]',
+                'bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]',
                 'best[ext=mp4][height<=1080]',
-                'best[ext=mp4][height<=720]',
                 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]',
-                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]',
                 'best[height<=1080]',
                 'best[height<=720]',
                 'worst',
