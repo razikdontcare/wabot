@@ -48,6 +48,7 @@ import {
   AIKnowledgeVectorService,
   type KnowledgeScope,
 } from "../../domain/services/AIKnowledgeVectorService.js";
+import type { Logger } from "pino";
 
 interface AIImageInput {
   dataUrl: string;
@@ -86,7 +87,7 @@ export class AskAICommand extends CommandInterface {
     category: "general",
     commandClass: AskAICommand,
     cooldown: 5000,
-    maxUses: 2,
+    maxUses: 10,
     vipBypassCooldown: true, // VIP users bypass cooldown
   };
 
@@ -431,13 +432,10 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           continue;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const messageObj: any = {
-          role: message.role,
+        messages.push({
+          role: message.role as "user" | "assistant" | "system",
           content: message.content,
-        };
-
-        messages.push(messageObj);
+        });
       }
 
       let responseToolUsed = false;
@@ -507,7 +505,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           inputSchema: z
             .object({
               mediaType: z.enum(["image", "video", "audio", "document"]),
-              url: z.url().optional(),
+              url: z.string().url().optional(),
               dataUrl: z.string().optional(),
               caption: z.string().optional(),
               fileName: z.string().optional(),
@@ -597,7 +595,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         web_fetch: createTool({
           description: "Fetch content from a URL",
           inputSchema: z.object({
-            url: z.url(),
+            url: z.string().url(),
             options: z
               .object({
                 method: z.string().optional(),
@@ -676,19 +674,15 @@ You have identified a research-heavy request. Follow these steps for maximum acc
             calledTools.includes("send_media")
           ) {
             responseToolUsed = true;
-            // If the AI is sending a final response tool, we can clear/remove the status message
-            // or just leave it. For now, let's keep it until the very end.
           }
 
           if (calledTools.length > 0) {
             log.info(`Tool calls detected: ${calledTools.join(", ")}`);
 
-            // Inform the user about tool usage
             if (jid && sock) {
               const toolDescriptions = (toolCalls || []).map((call) => {
                 const name = call?.toolName || "unknown";
                 const emoji = toolEmojis[name] || "🛠️";
-                // Capitalize and replace underscores
                 const readableName = name
                   .replace(/_/g, " ")
                   .replace(/\b\w/g, (l) => l.toUpperCase());
@@ -699,7 +693,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
 
               if (!statusMsgKey) {
                 const sent = await sock.sendMessage(jid, { text: statusText });
-                statusMsgKey = sent?.key;
+                statusMsgKey = sent?.key || undefined;
               } else {
                 await sock.sendMessage(jid, {
                   text: statusText,
@@ -710,12 +704,6 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           }
         },
       });
-
-      // After generation finishes, if we have a status message, we might want to update it one last time
-      if (statusMsgKey && jid && sock) {
-        // You could either delete it or update it to "Selesai"
-        // Let's just leave it for now, it's a good trace of what happened.
-      }
 
       if (!responseToolUsed) {
         const fallbackResponse = result.text?.trim();
@@ -1733,8 +1721,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         "buffer",
         {},
         {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          logger: log as any,
+          logger: log as unknown as Logger,
           reuploadRequest: sock.updateMediaMessage,
         },
       );

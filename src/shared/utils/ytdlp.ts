@@ -6,7 +6,41 @@ import { randomUUID } from "crypto";
 import { Readable } from "stream";
 import { log } from "../../infrastructure/config/config.js";
 
-interface YtDlpOptions {
+export interface YtDlpFormat {
+  format_id: string;
+  protocol: string;
+  ext: string;
+  resolution?: string;
+  filesize?: number;
+  filesize_approx?: number;
+  [key: string]: unknown;
+}
+
+export interface YtDlpVideoInfo {
+  id: string;
+  title: string;
+  duration?: number;
+  is_live?: boolean;
+  format_id?: string;
+  formats?: YtDlpFormat[];
+  filesize?: number;
+  filesize_approx?: number;
+  destination?: string;
+  progress?: number;
+  [key: string]: unknown;
+}
+
+export interface DownloadProgress {
+  percent: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  // bytes per second
+  speed: number;
+  // estimated seconds remaining
+  eta: number;
+}
+
+export interface YtDlpOptions {
   cookiesFile?: string;
   noMtime?: boolean;
   sortBy?: string;
@@ -28,58 +62,33 @@ interface YtDlpOptions {
   // Skip separate info fetch (assume already validated)
   skipInfoFetch?: boolean;
   // Pre-fetched video info to use for validation
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  videoInfo?: any;
+  videoInfo?: YtDlpVideoInfo;
   // Proxy URL (e.g., http://proxy.example.com:8080, socks5://127.0.0.1:1080)
   proxy?: string;
   // Use system proxy
   useSystemProxy?: boolean;
 }
 
-interface YtDlpResult {
+export interface YtDlpResult {
   buffer: Buffer;
   filename: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  metadata?: any;
+  metadata?: YtDlpVideoInfo;
 }
 
-interface YtDlpStreamResult {
+export interface YtDlpStreamResult {
   stream: Readable;
   filename: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  metadata?: any;
+  metadata?: YtDlpVideoInfo;
   // Promise that resolves when the process closes
   wait: () => Promise<void>;
 }
 
-interface DownloadProgress {
-  percent: number;
-  downloadedBytes: number;
-  totalBytes: number;
-  // bytes per second
-  speed: number;
-  // estimated seconds remaining
-  eta: number;
-}
-
 /**
  * YtDlpWrapper - Optimized yt-dlp wrapper for fast video/audio downloads
- *
- * Speed Optimizations:
- * 1. aria2c external downloader: Parallel connections (-x 16 -s 16 -k 1M) for faster downloads
- * 2. Concurrent fragments: Downloads HLS/DASH segments in parallel (--concurrent-fragments 5)
- * 3. Pre-muxed formats: Prefers mp4/m4a to avoid ffmpeg remuxing overhead
- * 4. Reduced logging: --no-progress and -q flags to minimize I/O overhead
- * 5. Fragment retries: --fragment-retries 5 for robustness
- * 6. Smart format selection: Prioritizes already-muxed formats over separate video+audio
- *
- * Requirements:
- * - aria2c must be installed on the system for external downloader support
- * - yt-dlp must be installed and accessible in PATH
  */
 export class YtDlpWrapper {
   private cookiesFile: string;
-  private readonly DOWNLOAD_TIMEOUT = 300000; // 5 minutes timeout// 100MB limit
+  private readonly DOWNLOAD_TIMEOUT = 300000; // 5 minutes timeout
   private readonly MAX_DURATION = 600; // 10 minutes limit
   private useAria2c: boolean = false; // Enable aria2c by default for speed
 
@@ -88,8 +97,10 @@ export class YtDlpWrapper {
     this.useAria2c = useAria2c;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async getVideoInfo(url: string, options: YtDlpOptions = {}): Promise<any> {
+  async getVideoInfo(
+    url: string,
+    options: YtDlpOptions = {},
+  ): Promise<YtDlpVideoInfo> {
     const args = [
       "yt-dlp",
       "--dump-json",
@@ -102,7 +113,6 @@ export class YtDlpWrapper {
       "node",
     ];
 
-    // Add proxy if specified
     if (options.proxy) {
       args.push("--proxy", options.proxy);
     }
@@ -110,52 +120,33 @@ export class YtDlpWrapper {
     args.push(url);
 
     try {
-      const { stdout } = await this.executeCommandWithTimeout(args, 30000); // 30s timeout for info
-      return JSON.parse(stdout);
+      const { stdout } = await this.executeCommandWithTimeout(args, 30000);
+      return JSON.parse(stdout) as YtDlpVideoInfo;
     } catch (error) {
       throw new Error(`Failed to get video info: ${error}`);
     }
   }
 
-  /**
-   * Download video or audio to buffer with optimized performance.
-   *
-   * Performance Optimization:
-   * - Uses --print-json flag to fetch metadata DURING download (single yt-dlp process!)
-   * - If videoInfo is provided, uses it for pre-validation and skips --print-json
-   * - This eliminates redundant yt-dlp execution, significantly improving performance
-   *
-   * @param url - Video URL to download
-   * @param options - Download options including optional pre-fetched videoInfo
-   * @returns Promise with buffer, filename and metadata
-   */
   async downloadToBuffer(
     url: string,
     options: YtDlpOptions = {},
   ): Promise<YtDlpResult> {
-    // If pre-fetched info is provided, validate it upfront
     if (options.videoInfo) {
       const videoInfo = options.videoInfo;
-
-      // Check duration limit
       if (videoInfo.duration && videoInfo.duration > this.MAX_DURATION) {
         throw new Error(
           `Video too long: ${Math.round(videoInfo.duration / 60)} minutes (max: ${this.MAX_DURATION / 60} minutes)`,
         );
       }
-
-      // Check if it's a live stream
       if (videoInfo.is_live) {
         throw new Error("Live streams are not supported");
       }
     }
 
-    // Generate temporary filename
     const tempId = randomUUID();
     const tempDir = tmpdir();
     const outputTemplate = join(tempDir, `ytdlp_${tempId}.%(ext)s`);
 
-    // Build command arguments
     const args = this.buildArgs(
       url,
       outputTemplate,
@@ -163,40 +154,28 @@ export class YtDlpWrapper {
       !!options.onProgress,
     );
 
-    // Add --print-json to get metadata during download (single process optimization!)
-    // Only add if videoInfo is not provided
     if (!options.videoInfo) {
-      // Insert after 'yt-dlp' command
       args.splice(1, 0, "--print-json");
     }
 
     try {
-      // Execute yt-dlp command with timeout
       const { stdout } = await this.executeCommandWithTimeout(
         args,
         this.DOWNLOAD_TIMEOUT,
         options.onProgress,
       );
 
-      // Find the downloaded file
       const downloadedFile = await this.findDownloadedFile(tempDir, tempId);
-
       if (!downloadedFile) {
         throw new Error("Downloaded file not found");
       }
 
-      // Read file into buffer
       const buffer = await fs.readFile(downloadedFile.path);
-
-      // Clean up temporary file
       await fs.unlink(downloadedFile.path).catch(() => {});
 
-      // Parse metadata from stdout if not provided
       let metadata = options.videoInfo;
       if (!metadata && stdout) {
         try {
-          // --print-json outputs JSON before download starts
-          // Look for the first complete JSON object in stdout
           const lines = stdout.split("\n");
           let jsonStr = "";
           let braceCount = 0;
@@ -213,36 +192,25 @@ export class YtDlpWrapper {
               }
               if (char === "}") {
                 braceCount--;
-                if (braceCount === 0 && foundStart) {
-                  // Found complete JSON object
-                  break;
-                }
+                if (braceCount === 0 && foundStart) break;
               }
             }
-            if (braceCount === 0 && foundStart) {
-              break;
-            }
-            if (foundStart) {
-              jsonStr += "\n";
-            }
+            if (braceCount === 0 && foundStart) break;
+            if (foundStart) jsonStr += "\n";
           }
 
           if (jsonStr) {
-            metadata = JSON.parse(jsonStr);
-
-            // Validate after download (in case validation is needed)
+            metadata = JSON.parse(jsonStr) as YtDlpVideoInfo;
             if (metadata.duration && metadata.duration > this.MAX_DURATION) {
               throw new Error(
                 `Video too long: ${Math.round(metadata.duration / 60)} minutes (max: ${this.MAX_DURATION / 60} minutes)`,
               );
             }
-
             if (metadata.is_live) {
               throw new Error("Live streams are not supported");
             }
           }
-        } catch (_parseError) {
-          // Fallback to basic metadata if JSON parsing fails
+        } catch {
           metadata = this.parseMetadata(stdout);
         }
       }
@@ -250,69 +218,51 @@ export class YtDlpWrapper {
       return {
         buffer,
         filename: downloadedFile.name,
-        metadata: metadata || {},
+        metadata: metadata || { id: "", title: "" },
       };
     } catch (error) {
-      // Clean up any partial downloads
       await this.cleanupTempFiles(tempDir, tempId);
       throw new Error(`yt-dlp failed: ${error}`);
     }
   }
 
-  /**
-   * Download video or audio as stream with optimized performance.
-   * This saves memory by not buffering the entire file.
-   *
-   * @param url - Video URL to download
-   * @param options - Download options
-   * @returns Promise with stream, suggested filename and metadata
-   */
   async downloadAsStream(
     url: string,
     options: YtDlpOptions = {},
   ): Promise<YtDlpStreamResult> {
-    // 1. Get metadata first for validation and filename
     const metadata =
       options.videoInfo || (await this.getVideoInfo(url, options));
 
-    // Check duration limit
     if (metadata.duration && metadata.duration > this.MAX_DURATION) {
       throw new Error(
         `Video too long: ${Math.round(metadata.duration / 60)} minutes (max: ${this.MAX_DURATION / 60} minutes)`,
       );
     }
 
-    // Check if it's a live stream
     if (metadata.is_live) {
       throw new Error("Live streams are not supported");
     }
 
-    // Suggested filename
     const ext = options.audioOnly ? "mp3" : "mp4";
     const filename = `${metadata.title || "download"}.${ext}`;
 
-    // 2. Build command arguments for streaming to stdout
     const streamOptions = { ...options, streamToStdout: true };
     const args = this.buildArgs(url, "-", streamOptions, !!options.onProgress);
 
-    // 3. Spawn process
     const process = spawn(args[0], args.slice(1), {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Parse progress from stderr (stdout is used for media)
     if (options.onProgress) {
       process.stderr?.on("data", (data) => {
         this.parseProgress(data.toString(), options.onProgress!);
       });
     }
 
-    // Handle process errors
     process.on("error", (error) => {
       log.error("yt-dlp process error:", error);
     });
 
-    // Create a promise that resolves when the process closes
     const wait = () =>
       new Promise<void>((resolve, reject) => {
         process.on("close", (code) => {
@@ -320,8 +270,6 @@ export class YtDlpWrapper {
           else reject(new Error(`yt-dlp exited with code ${code}`));
         });
         process.on("error", reject);
-
-        // Safety timeout for the wait
         setTimeout(
           () => reject(new Error("Wait timeout")),
           this.DOWNLOAD_TIMEOUT,
@@ -336,7 +284,6 @@ export class YtDlpWrapper {
     };
   }
 
-  // Convenience method for your specific command
   async downloadVideo(url: string): Promise<YtDlpResult> {
     return this.downloadToBuffer(url, {
       noMtime: true,
@@ -347,7 +294,6 @@ export class YtDlpWrapper {
     });
   }
 
-  // Convenience method for downloading audio only
   async downloadAudio(
     url: string,
     format: string = "mp3",
@@ -369,53 +315,34 @@ export class YtDlpWrapper {
   ): string[] {
     const args = ["yt-dlp"];
 
-    // Performance: Reduce logging overhead
-    // Don't suppress progress if callback is provided
     if (!hasProgressCallback) {
-      if (options.quiet !== false) {
-        args.push("--no-progress");
-      }
-      if (options.quiet) {
-        args.push("-q");
-      }
+      if (options.quiet !== false) args.push("--no-progress");
+      if (options.quiet) args.push("-q");
     } else {
-      // Force newline output for progress parsing
       args.push("--newline");
     }
 
     args.push("--no-playlist");
+    if (options.noMtime !== false) args.push("--no-mtime");
 
-    // Add no-mtime flag
-    if (options.noMtime !== false) {
-      args.push("--no-mtime");
-    }
-
-    // Add sort parameter - prefer pre-muxed formats to avoid ffmpeg remuxing
     if (options.sortBy) {
       args.push("-S", options.sortBy);
     } else {
       args.push("-S", "ext:mp4:m4a");
     }
 
-    // Add cookies file
     const cookiesFile = options.cookiesFile || this.cookiesFile;
     args.push("--cookies", cookiesFile);
-
     args.push("--js-runtimes", "node");
 
-    // Add proxy if specified
     if (options.proxy) {
       args.push("--proxy", options.proxy);
     }
 
-    // Performance: Enable concurrent fragments for HLS/DASH streams
     const concurrentFragments = options.concurrentFragments || 5;
     args.push("--concurrent-fragments", String(concurrentFragments));
-
-    // Performance: Fragment retries for robustness
     args.push("--fragment-retries", "5");
 
-    // Performance: Use aria2c external downloader for parallel connections
     const useAria2c =
       options.useAria2c !== undefined ? options.useAria2c : this.useAria2c;
     if (useAria2c) {
@@ -424,35 +351,30 @@ export class YtDlpWrapper {
       args.push("--downloader-args", `aria2c:${aria2cArgs}`);
     }
 
-    // Add output template or stream to stdout
     if (options.streamToStdout) {
       args.push("-o", "-");
     } else {
       args.push("-o", outputTemplate);
     }
 
-    // Enhanced format selection - prefer H.264 (avc1) and AAC for WhatsApp compatibility
     if (options.format) {
       args.push("-f", options.format);
     } else if (options.audioOnly) {
-      // Priority: m4a > mp3 > any audio (m4a is pre-muxed)
       args.push("-f", "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best");
     } else {
-      // Prefer pre-muxed mp4 formats with avc1 (H.264) to avoid VP9 (unsupported on many WA clients).
-      // When streaming to stdout (-o -), merging or using HLS/DASH generates fragmented MP4s,
-      // which WhatsApp cannot play inline. Therefore, we heavily prioritize direct HTTP streams.
       const videoFormats = options.streamToStdout
         ? [
+            "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1080][vcodec^=avc1]",
             "best[vcodec^=avc1][ext=mp4][protocol^=http][height<=1080]",
             "best[ext=mp4][protocol^=http][height<=1080]",
             "best[protocol^=http][height<=1080]",
-            // Fallbacks if no direct HTTP stream is available (might be fragmented)
-            "best[vcodec^=avc1][ext=mp4][height<=1080]",
             "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[ext=m4a]",
+            "best[vcodec^=avc1][ext=mp4][height<=1080]",
             "best[height<=1080]",
             "worst",
           ]
         : [
+            "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/best[height<=1080][vcodec^=avc1]",
             "best[vcodec^=avc1][ext=mp4][height<=1080]",
             "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[ext=m4a]",
             "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]",
@@ -465,20 +387,14 @@ export class YtDlpWrapper {
       args.push("-f", videoFormats.join("/"));
     }
 
-    // Audio processing for video downloads
-    if (!options.audioOnly) {
-      args.push("--merge-output-format", "mp4");
-    }
+    if (!options.audioOnly) args.push("--merge-output-format", "mp4");
 
-    // Audio only option
     if (options.audioOnly) {
       args.push("-x");
       args.push("--audio-format", "mp3");
     }
 
-    // Add URL
     args.push(url);
-
     return args;
   }
 
@@ -496,49 +412,33 @@ export class YtDlpWrapper {
       let stderr = "";
       let isResolved = false;
 
-      // Set up timeout
       const timeout = setTimeout(() => {
         if (!isResolved) {
           isResolved = true;
           process.kill("SIGTERM");
-
-          // Force kill if SIGTERM doesn't work
           setTimeout(() => {
-            if (!process.killed) {
-              process.kill("SIGKILL");
-            }
+            if (!process.killed) process.kill("SIGKILL");
           }, 5000);
-
           reject(new Error(`Download timeout after ${timeoutMs}ms`));
         }
       }, timeoutMs);
 
       process.stdout?.on("data", (data) => {
         stdout += data.toString();
-        // Parse progress from stdout if callback provided
-        if (onProgress) {
-          this.parseProgress(data.toString(), onProgress);
-        }
+        if (onProgress) this.parseProgress(data.toString(), onProgress);
       });
 
       process.stderr?.on("data", (data) => {
         stderr += data.toString();
-        // yt-dlp outputs progress to stderr
-        if (onProgress) {
-          this.parseProgress(data.toString(), onProgress);
-        }
+        if (onProgress) this.parseProgress(data.toString(), onProgress);
       });
 
       process.on("close", (code) => {
         if (!isResolved) {
           isResolved = true;
           clearTimeout(timeout);
-
-          if (code === 0) {
-            resolve({ stdout, stderr });
-          } else {
-            reject(new Error(`Process exited with code ${code}: ${stderr}`));
-          }
+          if (code === 0) resolve({ stdout, stderr });
+          else reject(new Error(`Process exited with code ${code}: ${stderr}`));
         }
       });
 
@@ -556,19 +456,8 @@ export class YtDlpWrapper {
     output: string,
     onProgress: (progress: DownloadProgress) => void,
   ): void {
-    // yt-dlp progress format variations:
-    // [download]   0.0% of   17.70MiB at  107.11KiB/s ETA 02:49
-    // [download]  45.2% of  123.45MiB at  1.23MiB/s ETA 00:45
-    // [download] 100.0% of   17.70MiB at    1.09MiB/s ETA 00:00
-    // [download] 100% of   17.70MiB in 00:00:17 at 1.03MiB/s (completion format)
-    console.log(output);
-
-    // Process each line separately (output may contain multiple lines)
     const lines = output.split("\n");
-
     for (const line of lines) {
-      // Pattern 1: Standard progress with ETA
-      // [download]   0.0% of   17.70MiB at  107.11KiB/s ETA 02:49
       let progressMatch = line.match(
         /\[download]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s\s+ETA\s+(\d+):(\d+)/,
       );
@@ -582,19 +471,11 @@ export class YtDlpWrapper {
         const etaMinutes = parseInt(progressMatch[6], 10);
         const etaSeconds = parseInt(progressMatch[7], 10);
 
-        // Validate parsed values
-        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
-          continue;
-        }
+        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) continue;
 
-        // Convert to bytes
         const totalBytes = this.convertToBytes(totalSize, totalUnit);
         const speedBytes = this.convertToBytes(speed, speedUnit);
-
-        // Prevent division by zero or invalid calculations
-        if (totalBytes === 0) {
-          continue;
-        }
+        if (totalBytes === 0) continue;
 
         const downloadedBytes = (totalBytes * percent) / 100;
         const etaTotal = etaMinutes * 60 + etaSeconds;
@@ -609,8 +490,6 @@ export class YtDlpWrapper {
         continue;
       }
 
-      // Pattern 2: Completion format
-      // [download] 100% of   17.70MiB in 00:00:17 at 1.03MiB/s
       const completionMatch = line.match(
         /\[download]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\s+in\s+(\d+):(\d+):(\d+)\s+at\s+(\d+\.?\d*)\s*(KiB|MiB|GiB|KB|MB|GB|B)\/s/,
       );
@@ -622,18 +501,11 @@ export class YtDlpWrapper {
         const speed = parseFloat(completionMatch[7]);
         const speedUnit = completionMatch[8];
 
-        // Validate parsed values
-        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
-          continue;
-        }
+        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) continue;
 
-        // Convert to bytes
         const totalBytes = this.convertToBytes(totalSize, totalUnit);
         const speedBytes = this.convertToBytes(speed, speedUnit);
-
-        if (totalBytes === 0) {
-          continue;
-        }
+        if (totalBytes === 0) continue;
 
         const downloadedBytes = (totalBytes * percent) / 100;
 
@@ -642,12 +514,11 @@ export class YtDlpWrapper {
           downloadedBytes,
           totalBytes,
           speed: speedBytes,
-          eta: 0, // Completion has no ETA
+          eta: 0,
         });
         continue;
       }
 
-      // Pattern 3: Fallback for formats without explicit units (assumes MiB default)
       const fallbackMatch = line.match(
         /\[download]\s+(\d+\.?\d*)%\s+of\s+~?\s*(\d+\.?\d*)\s+at\s+(\d+\.?\d*)\s+ETA\s+(\d+):(\d+)/,
       );
@@ -659,18 +530,11 @@ export class YtDlpWrapper {
         const etaMinutes = parseInt(fallbackMatch[4], 10);
         const etaSeconds = parseInt(fallbackMatch[5], 10);
 
-        // Validate parsed values
-        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) {
-          continue;
-        }
+        if (isNaN(percent) || isNaN(totalSize) || isNaN(speed)) continue;
 
-        // Use default MiB units
         const totalBytes = this.convertToBytes(totalSize, "MiB");
         const speedBytes = this.convertToBytes(speed, "MiB");
-
-        if (totalBytes === 0) {
-          continue;
-        }
+        if (totalBytes === 0) continue;
 
         const downloadedBytes = (totalBytes * percent) / 100;
         const etaTotal = etaMinutes * 60 + etaSeconds;
@@ -686,20 +550,8 @@ export class YtDlpWrapper {
     }
   }
 
-  private isTikTokUrl(url: string): boolean {
-    return (
-      url.includes("tiktok.com") ||
-      url.includes("vm.tiktok.com") ||
-      url.includes("vt.tiktok.com")
-    );
-  }
-
   private convertToBytes(value: number, unit: string): number {
-    // Validate input
-    if (isNaN(value) || value < 0) {
-      return 0;
-    }
-
+    if (isNaN(value) || value < 0) return 0;
     const units: { [key: string]: number } = {
       B: 1,
       KiB: 1024,
@@ -709,10 +561,7 @@ export class YtDlpWrapper {
       MB: 1000 * 1000,
       GB: 1000 * 1000 * 1000,
     };
-
-    // Return bytes value, default to MiB if unit is unknown
-    const multiplier = units[unit] || units["MiB"];
-    return value * multiplier;
+    return value * (units[unit] || units["MiB"]);
   }
 
   private async cleanupTempFiles(
@@ -724,12 +573,11 @@ export class YtDlpWrapper {
       const tempFiles = files.filter((file) =>
         file.includes(`ytdlp_${tempId}`),
       );
-
       await Promise.all(
         tempFiles.map((file) => fs.unlink(join(tempDir, file)).catch(() => {})),
       );
-    } catch (_error) {
-      // Ignore cleanup errors
+    } catch {
+      /* ignore */
     }
   }
 
@@ -742,58 +590,34 @@ export class YtDlpWrapper {
       const downloadedFile = files.find((file) =>
         file.includes(`ytdlp_${tempId}`),
       );
-
       if (downloadedFile) {
         return {
           path: join(tempDir, downloadedFile),
           name: downloadedFile.replace(`ytdlp_${tempId}.`, ""),
         };
       }
-
       return null;
-    } catch (_error) {
+    } catch {
       return null;
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private parseMetadata(stdout: string): any {
-    // Basic metadata parsing from stdout
-    // You can enhance this based on yt-dlp's JSON output format
+  private parseMetadata(stdout: string): YtDlpVideoInfo {
     try {
       const lines = stdout.split("\n");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const metadata: any = {};
-
+      const metadata: Partial<YtDlpVideoInfo> = {};
       lines.forEach((line) => {
         if (line.includes("[download]") && line.includes("Destination:")) {
           metadata.destination = line.split("Destination: ")[1];
         }
         if (line.includes("[download]") && line.includes("%")) {
           const match = line.match(/(\d+\.?\d*)%/);
-          if (match) {
-            metadata.progress = parseFloat(match[1]);
-          }
+          if (match) metadata.progress = parseFloat(match[1]);
         }
       });
-
-      return metadata;
+      return metadata as YtDlpVideoInfo;
     } catch {
-      return {};
+      return { id: "", title: "" };
     }
   }
 }
-
-// Usage example
-// export async function downloadYouTubeVideo(url: string): Promise<Buffer> {
-//   const wrapper = new YtDlpWrapper('cookies.txt');
-//   const result = await wrapper.downloadVideo(url);
-//   return result.buffer;
-// }
-
-// Usage example for audio
-// export async function downloadYouTubeAudio(url: string, format: string = 'mp3'): Promise<Buffer> {
-//   const wrapper = new YtDlpWrapper('cookies.txt');
-//   const result = await wrapper.downloadAudio(url, format);
-//   return result.buffer;
-// }
