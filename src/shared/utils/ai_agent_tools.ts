@@ -112,6 +112,23 @@ export async function delete_file(path: string): Promise<string> {
 /**
  * Specialized tool for managing MEMORY.md
  */
+export async function read_memory(): Promise<string> {
+  const memoryFile = "MEMORY.md";
+  try {
+    const targetPath = validatePath(memoryFile);
+    if (!existsSync(targetPath)) {
+      return `Memory file not found: ${memoryFile}`;
+    }
+    return readFileSync(targetPath, "utf-8");
+  } catch (error) {
+    log.error(`Error reading memory:`, error);
+    return `Error reading memory: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/**
+ * Specialized tool for managing MEMORY.md
+ */
 export async function update_memory(
   content: string,
   mode: "append" | "overwrite" = "append",
