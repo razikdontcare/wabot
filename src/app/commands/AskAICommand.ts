@@ -33,6 +33,7 @@ import {
   exec_command,
   list_files,
   read_file,
+  read_memory,
   update_memory,
   web_fetch,
   write_file,
@@ -85,7 +86,7 @@ export class AskAICommand extends CommandInterface {
     category: "general",
     commandClass: AskAICommand,
     cooldown: 5000,
-    maxUses: 10,
+    maxUses: 2,
     vipBypassCooldown: true, // VIP users bypass cooldown
   };
 
@@ -352,17 +353,22 @@ export class AskAICommand extends CommandInterface {
         ` Always deliver the actual response using reply_message() or send_message().` +
         ` If you need to send a file, image, video, audio, or document, use send_media().`;
 
+      // --- Memory & Context Protocol ---
+      finalSystemPrompt += `\n\n### MEMORY & CONTEXT PROTOCOL
+1. **Proactive Knowledge Search**: Before answering questions about the user, previous events, or complex topics, always use \`knowledge_search()\` to see if there is relevant information in the long-term memory or past conversations.
+2. **Global Memory Access**: Use \`read_memory()\` to check \`MEMORY.md\` for high-level personal details, global facts, or persistent instructions about the user that might not be in the vector search.
+3. **Contextual Awareness**: Use the information found to personalize your response and maintain consistency.
+4. **Memory Updates**: If the user shares important personal details (e.g., their name, preferences, or significant life events), use \`update_memory()\` to store this for future reference.
+5. **Knowledge Upsert**: For factual information that might be useful later, the system automatically saves chat turns, but you can use \`write_file()\` to specific knowledge files if requested.`;
+
       // --- Deep Research Enhancement ---
       const lastUserMessage =
         conversationHistory.findLast((m) => m.role === "user")?.content || "";
-      const isResearchIntent =
-        /research|deep dive|teliti|analisis mendalam|investigasi|cari tahu seluk beluk|berita terbaru|carikan/i.test(
-          lastUserMessage,
-        );
+      const isResearchIntent = this.detectResearchIntent(lastUserMessage);
 
-      let stopWhenSteps = 8;
+      let stopWhenSteps = 15;
       if (isResearchIntent) {
-        stopWhenSteps = 12;
+        stopWhenSteps = 25;
         finalSystemPrompt += `\n\n### DEEP RESEARCH PROTOCOL ACTIVATED
 You have identified a research-heavy request. Follow these steps for maximum accuracy:
 1. **Multi-Source Verification**: Do not rely on a single search result. Compare information from at least 3 different sources.
@@ -370,9 +376,9 @@ You have identified a research-heavy request. Follow these steps for maximum acc
 3. **Fact Checking**: Check for contradictory information. If found, present both sides.
 4. **Structured Report**: Synthesize your findings into a comprehensive, well-structured report. Use bolding and lists for readability.
 5. **Citations**: Always include the source URLs you used at the end of your report.
-6. **Efficiency**: You have an increased step limit (12 steps) to complete this investigation.`;
+6. **Efficiency**: You have an increased step limit (25 steps) to complete this investigation.`;
 
-        log.info("Deep Research Mode activated for this request (12 steps)");
+        log.info("Deep Research Mode activated for this request (25 steps)");
       }
       // ---------------------------------
 
@@ -576,6 +582,11 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           }),
           execute: async ({ content, mode }) => update_memory(content, mode),
         }),
+        read_memory: createTool({
+          description: "Read the entire content of MEMORY.md",
+          inputSchema: z.object({}),
+          execute: async () => read_memory(),
+        }),
         exec_command: createTool({
           description: "Execute a shell command in the bot's workspace",
           inputSchema: z.object({
@@ -642,6 +653,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         write_file: "📝",
         delete_file: "🗑️",
         update_memory: "🧠",
+        read_memory: "📖",
         exec_command: "💻",
         web_fetch: "🌐",
         execute_bot_command: "⚙️",
@@ -1810,5 +1822,75 @@ You have identified a research-heavy request. Follow these steps for maximum acc
     if (hours > 0) return `${hours}h ago`;
     if (minutes > 0) return `${minutes}m ago`;
     return "just now";
+  }
+
+  private detectResearchIntent(text: string): boolean {
+    if (!text) return false;
+
+    const normalizedText = text.toLowerCase();
+
+    // 1. Core Keywords (Indonesian & English)
+    const researchKeywords = [
+      // Indonesian
+      "research",
+      "teliti",
+      "investigasi",
+      "analisis",
+      "mendalam",
+      "cari tahu",
+      "seluk beluk",
+      "ulas tuntas",
+      "bedah materi",
+      "pelajari lebih lanjut",
+      "cek fakta",
+      "berita terbaru",
+      "perkembangan terkini",
+      "sejarah",
+      "asal usul",
+      "latar belakang",
+      "studi kasus",
+
+      // English
+      "deep dive",
+      "comprehensive",
+      "investigate",
+      "thorough",
+      "detailed explanation",
+      "fact check",
+      "latest news",
+      "recent developments",
+      "scientific",
+      "academic",
+      "background",
+      "origin",
+      "history of",
+    ];
+
+    const hasKeyword = researchKeywords.some((keyword) =>
+      normalizedText.includes(keyword),
+    );
+
+    if (hasKeyword) return true;
+
+    // 2. Structural Clues (How/Why questions that imply depth)
+    const structuralPatterns = [
+      /^bagaimana cara kerja/i,
+      /^jelaskan secara detail/i,
+      /^apa perbedaan antara/i,
+      /^explain the difference between/i,
+      /^how does .* work/i,
+      /^what is the history of/i,
+    ];
+
+    const hasPattern = structuralPatterns.some((pattern) =>
+      pattern.test(normalizedText),
+    );
+
+    if (hasPattern) return true;
+
+    // 3. Length heuristic (Very long questions often imply complex research needs)
+    if (text.length > 250) return true;
+
+    return false;
   }
 }

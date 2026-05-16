@@ -5,7 +5,7 @@ export function createAskAgent(
   route: AIProviderRoute,
   instructions: string,
   tools: ConstructorParameters<typeof ToolLoopAgent>[0]["tools"],
-  stopWhenSteps = 5,
+  stopWhenSteps = 10,
 ) {
   return new ToolLoopAgent({
     id: "ask-ai-agent",
