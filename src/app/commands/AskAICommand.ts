@@ -13,7 +13,7 @@ import { getMongoClient } from "../../infrastructure/config/mongo.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
-import { stepCountIs, tool as createTool, type ModelMessage } from "ai";
+import { tool as createTool, type ModelMessage } from "ai";
 import { createAskAgent } from "../agents/AskAgent.js";
 import { z } from "zod";
 import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
