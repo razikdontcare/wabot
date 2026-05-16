@@ -1,10 +1,15 @@
-import { proto, AnyMessageContent } from "baileys";
+import { proto, AnyMessageContent, WAMediaUpload } from "baileys";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
 import { BotConfig, log } from "../../infrastructure/config/config.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
-import { YtDlpWrapper } from "../../shared/utils/ytdlp.js";
+import {
+  YtDlpWrapper,
+  YtDlpVideoInfo,
+  DownloadProgress,
+} from "../../shared/utils/ytdlp.js";
 import extractUrlsFromText from "../../shared/utils/extractUrlsFromText.js";
+import { Readable } from "stream";
 
 export class DownloaderCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
@@ -39,7 +44,6 @@ export class DownloaderCommand extends CommandInterface {
     sessionService: SessionService,
     msg: proto.IWebMessageInfo,
   ): Promise<void> {
-    // const _config = await getCurrentConfig();
     if (args.length > 0 && args[0] === "help") {
       await sock.sendMessage(jid, {
         text: `Usage: ${DownloaderCommand.commandInfo.helpText}`,
@@ -62,7 +66,6 @@ export class DownloaderCommand extends CommandInterface {
     )
       sendAsDocument = true;
 
-    // Combined variations
     if (flags.some((a) => ["ad", "da", "-ad", "-da"].includes(a))) {
       downloadMode = "audio";
       sendAsDocument = true;
@@ -73,10 +76,8 @@ export class DownloaderCommand extends CommandInterface {
     }
     log.info("Download mode set to:", downloadMode);
 
-    // 2. Try to extract URL from args or quoted message
     let url = extractUrlsFromText(args.join(" "))[0] || null;
     if (!url && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-      // Try to extract from quoted message text
       const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
       let quotedText = "";
       if (quoted?.conversation) quotedText = quoted.conversation;
@@ -100,25 +101,20 @@ export class DownloaderCommand extends CommandInterface {
     }
 
     try {
-      // Step 1: Initial status - Fetching metadata
       const statusMsg = await sock.sendMessage(jid, {
         text: "🔍 Mengambil informasi media...",
       });
       const progressMessageKey = statusMsg?.key;
 
-      // Track progress for live updates
       let lastProgressUpdate = 0;
       const progressUpdateInterval = 3000;
       let isUpdating = false;
 
-      // Fetch metadata first (fast)
-      const videoInfo = await this.ytdl.getVideoInfo(url, {
-          proxy: isTikTok ? process.env.PROXY : undefined,
+      const videoInfo: YtDlpVideoInfo = await this.ytdl.getVideoInfo(url, {
+        proxy: isTikTok ? process.env.PROXY : undefined,
       });
 
-      // Progress callback function
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const handleProgress = async (progress: any) => {
+      const handleProgress = async (progress: DownloadProgress) => {
         if (
           !progress ||
           typeof progress.percent !== "number" ||
@@ -128,8 +124,11 @@ export class DownloaderCommand extends CommandInterface {
         }
 
         const now = Date.now();
-        // Throttle updates to avoid rate limiting
-        if (now - lastProgressUpdate > progressUpdateInterval && !isUpdating && progressMessageKey) {
+        if (
+          now - lastProgressUpdate > progressUpdateInterval &&
+          !isUpdating &&
+          progressMessageKey
+        ) {
           isUpdating = true;
           lastProgressUpdate = now;
 
@@ -142,18 +141,23 @@ export class DownloaderCommand extends CommandInterface {
             text += `${progressBar} ${percent}%\n\n`;
             text += `⚡ Speed: ${speedMBps} MB/s\n`;
 
-            if (progress.totalBytes && typeof progress.totalBytes === "number") {
+            if (
+              progress.totalBytes &&
+              typeof progress.totalBytes === "number"
+            ) {
               const sizeMB = (progress.totalBytes / (1024 * 1024)).toFixed(1);
               const eta = progress.eta || 0;
               const etaMinutes = Math.floor(eta / 60);
               const etaSeconds = eta % 60;
-              const etaText = etaMinutes > 0 ? `${etaMinutes}m ${etaSeconds}s` : `${etaSeconds}s`;
+              const etaText =
+                etaMinutes > 0
+                  ? `${etaMinutes}m ${etaSeconds}s`
+                  : `${etaSeconds}s`;
 
               text += `📦 Size: ${sizeMB}MB\n`;
               text += `⏱️ ETA: ${etaText}`;
             }
 
-            // Edit the existing message
             await sock.sendMessage(jid, {
               text: text,
               edit: progressMessageKey,
@@ -166,47 +170,74 @@ export class DownloaderCommand extends CommandInterface {
         }
       };
 
-      // Edit status to indicate download starting
       if (progressMessageKey) {
-          await sock.sendMessage(jid, {
-              text: "🔄 Memulai download...",
-              edit: progressMessageKey,
-          });
+        await sock.sendMessage(jid, {
+          text: "🔄 Memulai download...",
+          edit: progressMessageKey,
+        });
       }
 
-      // Step 2: Download stream (using pre-fetched metadata for efficiency)
-      const response = await this.ytdl.downloadAsStream(url, {
-        audioOnly: downloadMode === "audio",
-        useAria2c: false,
-        concurrentFragments: 5,
-        proxy: isTikTok ? process.env.PROXY : undefined,
-        onProgress: handleProgress,
-        videoInfo: videoInfo,
-      });
+      const bestFormat =
+        videoInfo?.formats?.find((f) => f.format_id === videoInfo.format_id) ||
+        videoInfo;
+      const protocol = (bestFormat?.protocol as string) || "";
+      const isFragmentedProtocol =
+        protocol.includes("m3u8") ||
+        protocol.includes("dash") ||
+        protocol.includes("mhtml");
+      const useBuffer =
+        isFragmentedProtocol && downloadMode === "video" && !sendAsDocument;
 
-      if (!response || !response.stream) {
-        await sock.sendMessage(jid, {
-          text: "Gagal mengunduh media. Silakan coba lagi.",
+      log.info(
+        `Adaptive Strategy: protocol=${protocol}, useBuffer=${useBuffer}`,
+      );
+
+      let mediaBuffer: Buffer | null = null;
+      let mediaStream: Readable | null = null;
+      let waitFn: (() => Promise<void>) | null = null;
+
+      if (useBuffer) {
+        log.info(
+          "Using downloadToBuffer for fragmented protocol to ensure playability",
+        );
+        const result = await this.ytdl.downloadToBuffer(url, {
+          audioOnly: downloadMode === "audio",
+          proxy: isTikTok ? process.env.PROXY : undefined,
+          onProgress: handleProgress,
+          videoInfo: videoInfo,
         });
-        return;
+        mediaBuffer = result.buffer;
+      } else {
+        log.info("Using downloadAsStream for direct/audio protocol");
+        const result = await this.ytdl.downloadAsStream(url, {
+          audioOnly: downloadMode === "audio",
+          useAria2c: false,
+          concurrentFragments: 5,
+          proxy: isTikTok ? process.env.PROXY : undefined,
+          onProgress: handleProgress,
+          videoInfo: videoInfo,
+        });
+        mediaStream = result.stream;
+        waitFn = result.wait;
       }
 
       const durationText = this.formatDuration(videoInfo?.duration || 0);
       const title = videoInfo?.title || "Unknown";
 
-      // Check file size
-      const fileSize = videoInfo?.filesize || videoInfo?.filesize_approx || 0;
+      const fileSize =
+        (videoInfo?.filesize as number) ||
+        (videoInfo?.filesize_approx as number) ||
+        0;
       const fileSizeMB = fileSize / (1024 * 1024);
 
       if (fileSize > 0 && fileSizeMB > this.MAX_DOCUMENT_SIZE_MB) {
         await sock.sendMessage(jid, {
           text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal limit bot adalah ${this.MAX_DOCUMENT_SIZE_MB}MB.`,
         });
-        response.stream.destroy();
+        if (mediaStream) mediaStream.destroy();
         return;
       }
 
-      // Automatically switch to document mode
       if (fileSizeMB > this.MAX_MEDIA_SIZE_MB && !sendAsDocument) {
         sendAsDocument = true;
         await sock.sendMessage(jid, {
@@ -218,21 +249,26 @@ export class DownloaderCommand extends CommandInterface {
         text: `📤 Mengirim ${downloadMode}${fileSizeMB > 0 ? ` (${fileSizeMB.toFixed(1)}MB)` : ""}...`,
       });
 
-      // Step 3: Send to WhatsApp
+      const mediaSource: WAMediaUpload = mediaBuffer || {
+        stream: mediaStream!,
+      };
+
       if (downloadMode === "audio") {
         try {
           if (sendAsDocument) {
-            await this.sendWithTimeout(sock, jid, {
-              document: { stream: response.stream },
+            const message: AnyMessageContent = {
+              document: mediaSource,
               mimetype: "audio/mp3",
               fileName: this.normalizeFilename(title) + ".mp3",
-            });
+            };
+            await this.sendWithTimeout(sock, jid, message);
           } else {
-            await this.sendWithTimeout(sock, jid, {
-              audio: { stream: response.stream },
+            const message: AnyMessageContent = {
+              audio: mediaSource,
               mimetype: "audio/mp4",
               fileName: this.normalizeFilename(title) + ".mp3",
-            });
+            };
+            await this.sendWithTimeout(sock, jid, message);
           }
         } catch (error) {
           log.error("Failed to send audio:", error);
@@ -249,17 +285,19 @@ export class DownloaderCommand extends CommandInterface {
           }
 
           if (sendAsDocument) {
-            await this.sendWithTimeout(sock, jid, {
-              document: { stream: response.stream },
+            const message: AnyMessageContent = {
+              document: mediaSource,
               mimetype: "video/mp4",
               fileName: this.normalizeFilename(title) + ".mp4",
-            });
+            };
+            await this.sendWithTimeout(sock, jid, message);
           } else {
-            await this.sendWithTimeout(sock, jid, {
-              video: { stream: response.stream },
+            const message: AnyMessageContent = {
+              video: mediaSource,
               mimetype: "video/mp4",
               fileName: this.normalizeFilename(title) + ".mp4",
-            });
+            };
+            await this.sendWithTimeout(sock, jid, message);
           }
         } catch (error) {
           log.error("Failed to send video:", error);
@@ -275,10 +313,10 @@ export class DownloaderCommand extends CommandInterface {
         }
       }
 
-      // Wait for clean exit
-      await response.wait().catch(e => log.warn("yt-dlp wait error:", e));
+      if (waitFn) {
+        await waitFn().catch((e) => log.warn("yt-dlp wait error:", e));
+      }
 
-      // Final Step: Edit status message to completed
       if (progressMessageKey) {
         await sock.sendMessage(jid, {
           text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}`,
@@ -287,7 +325,6 @@ export class DownloaderCommand extends CommandInterface {
       }
       return;
     } catch (error) {
-
       log.error("Download failed:", error);
       await this.handleDownloadError(error, sock, jid);
       return;
@@ -346,15 +383,9 @@ export class DownloaderCommand extends CommandInterface {
 
     const parts: string[] = [];
 
-    if (hours > 0) {
-      parts.push(`${hours} jam`);
-    }
-    if (minutes > 0) {
-      parts.push(`${minutes} menit`);
-    }
-    if (secs > 0 || parts.length === 0) {
-      parts.push(`${secs} detik`);
-    }
+    if (hours > 0) parts.push(`${hours} jam`);
+    if (minutes > 0) parts.push(`${minutes} menit`);
+    if (secs > 0 || parts.length === 0) parts.push(`${secs} detik`);
 
     return parts.join(" ");
   }
@@ -373,8 +404,7 @@ export class DownloaderCommand extends CommandInterface {
   }
 
   private async handleDownloadError(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    error: any,
+    error: unknown,
     sock: WebSocketInfo,
     jid: string,
   ): Promise<void> {
