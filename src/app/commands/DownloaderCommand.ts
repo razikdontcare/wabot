@@ -245,10 +245,6 @@ export class DownloaderCommand extends CommandInterface {
         });
       }
 
-      await sock.sendMessage(jid, {
-        text: `📤 Mengirim ${downloadMode}${fileSizeMB > 0 ? ` (${fileSizeMB.toFixed(1)}MB)` : ""}...`,
-      });
-
       const mediaSource: WAMediaUpload = mediaBuffer || {
         stream: mediaStream!,
       };
