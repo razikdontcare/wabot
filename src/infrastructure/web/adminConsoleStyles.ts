@@ -179,6 +179,41 @@ export const ADMIN_CONSOLE_STYLES = `:root {
       color: var(--danger);
     }
 
+    .summary-strip {
+      display: grid;
+      gap: 0.8rem;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .summary-card {
+      border: 1px solid color-mix(in srgb, var(--line) 88%, white 12%);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--panel-strong) 95%, white 5%);
+      box-shadow: var(--shadow-soft);
+      padding: 0.95rem 1rem;
+      display: grid;
+      gap: 0.18rem;
+    }
+
+    .summary-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+
+    .summary-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .summary-note {
+      font-size: 0.79rem;
+      color: var(--text-muted);
+    }
+
     .sections {
       display: grid;
       grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -213,6 +248,10 @@ export const ADMIN_CONSOLE_STYLES = `:root {
 
     .panel:nth-of-type(5) {
       animation-delay: 220ms;
+    }
+
+    .panel-intro {
+      background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 46%, white 54%), var(--panel));
     }
 
     .panel-head {
@@ -289,6 +328,45 @@ export const ADMIN_CONSOLE_STYLES = `:root {
       font-size: 0.93rem;
       font-weight: 600;
       overflow-wrap: anywhere;
+    }
+
+    .help-grid {
+      display: grid;
+      gap: 0.75rem;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .help-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      padding: 0.95rem;
+      display: grid;
+      gap: 0.45rem;
+    }
+
+    .help-card h3 {
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--text);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .help-card p {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+    }
+
+    .help-step {
+      width: fit-content;
+      border-radius: 999px;
+      padding: 0.12rem 0.5rem;
+      background: color-mix(in srgb, var(--accent) 12%, white 88%);
+      color: var(--accent);
+      font-size: 0.74rem;
+      font-weight: 700;
     }
 
     form,
@@ -388,6 +466,7 @@ export const ADMIN_CONSOLE_STYLES = `:root {
       font-size: 0.79rem;
       color: var(--text-muted);
       margin: 0;
+      line-height: 1.45;
     }
 
     .table-wrap {
@@ -529,6 +608,17 @@ export const ADMIN_CONSOLE_STYLES = `:root {
 
       .stat-list {
         grid-template-columns: 1fr;
+      }
+
+      .summary-strip,
+      .help-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .summary-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 

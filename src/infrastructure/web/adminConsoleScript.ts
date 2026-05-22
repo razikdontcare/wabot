@@ -23,6 +23,11 @@ export const ADMIN_CONSOLE_SCRIPT = `(() => {
         refreshQrBtn: document.getElementById('refreshQrBtn'),
         toggleQrStreamBtn: document.getElementById('toggleQrStreamBtn'),
 
+        summaryStatusValue: document.getElementById('summaryStatusValue'),
+        summaryMongoValue: document.getElementById('summaryMongoValue'),
+        summaryUptimeValue: document.getElementById('summaryUptimeValue'),
+        summaryLogsValue: document.getElementById('summaryLogsValue'),
+
         opsUptimeValue: document.getElementById('opsUptimeValue'),
         opsPidValue: document.getElementById('opsPidValue'),
         opsMemoryValue: document.getElementById('opsMemoryValue'),
@@ -176,6 +181,7 @@ export const ADMIN_CONSOLE_SCRIPT = `(() => {
         setText(ui.qrValue, data.hasQR ? 'yes' : 'no');
         setText(ui.userValue, data.user && data.user.id ? data.user.id : '-');
         setChip(data.status || 'unavailable');
+        setText(ui.summaryStatusValue, data.status || '-');
       }
 
       function clearQrObjectUrl() {
@@ -217,7 +223,8 @@ export const ADMIN_CONSOLE_SCRIPT = `(() => {
         }
 
         if (ui.opsNodeValue) ui.opsNodeValue.textContent = data.process && data.process.nodeVersion ? String(data.process.nodeVersion) : '-';
-        if (ui.opsMongoValue) ui.opsMongoValue.textContent = data.mongo && data.mongo.connected ? 'connected' : 'disconnected';
+        const mongoStatus = data.mongo && data.mongo.connected ? 'connected' : 'disconnected';
+        if (ui.opsMongoValue) ui.opsMongoValue.textContent = mongoStatus;
         if (ui.opsStreamsValue) {
           const qr = data.streams && Number.isFinite(Number(data.streams.qr)) ? Number(data.streams.qr) : 0;
           const logs = data.streams && Number.isFinite(Number(data.streams.logs)) ? Number(data.streams.logs) : 0;
@@ -237,6 +244,13 @@ export const ADMIN_CONSOLE_SCRIPT = `(() => {
         if (ui.opsMaintenanceValue) ui.opsMaintenanceValue.textContent = data.config && data.config.maintenanceMode ? 'enabled' : 'disabled';
         if (ui.opsUpdatedValue) ui.opsUpdatedValue.textContent = data.config && data.config.lastUpdated ? formatDate(data.config.lastUpdated) : '-';
         if (ui.opsUpdatedByValue) ui.opsUpdatedByValue.textContent = data.config && data.config.updatedBy ? String(data.config.updatedBy) : '-';
+        if (ui.summaryMongoValue) ui.summaryMongoValue.textContent = mongoStatus;
+        if (ui.summaryUptimeValue) ui.summaryUptimeValue.textContent = data.process && data.process.uptimeText ? String(data.process.uptimeText) : '-';
+        if (ui.summaryLogsValue) {
+          const buffered = data.logs && Number.isFinite(Number(data.logs.buffered)) ? Number(data.logs.buffered) : 0;
+          const capacity = data.logs && Number.isFinite(Number(data.logs.capacity)) ? Number(data.logs.capacity) : 0;
+          ui.summaryLogsValue.textContent = buffered + ' / ' + capacity;
+        }
       }
 
       function stopQrStream() {

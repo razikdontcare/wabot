@@ -3,7 +3,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
       <div class="topbar-row">
         <div class="brand">
           <h1>Meow Admin Console</h1>
-          <p>Operational control center for bot runtime, configuration, and telemetry.</p>
+          <p>Check the bot, fix connection issues, update settings, and read logs without guessing where to click.</p>
         </div>
         <div class="status-cluster">
           <span id="connectionBadge" class="chip">Checking status</span>
@@ -11,24 +11,72 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
         </div>
       </div>
       <nav class="nav" aria-label="Section Navigation">
-        <a href="#overview">Overview</a>
-        <a href="#operations">Operations</a>
-        <a href="#analytics">Analytics</a>
-        <a href="#configuration">Configuration</a>
+        <a href="#start">Start Here</a>
+        <a href="#overview">Connection</a>
+        <a href="#operations">Health</a>
+        <a href="#analytics">Usage</a>
+        <a href="#configuration">Settings</a>
         <a href="#logs">Logs</a>
       </nav>
       <div id="globalNotice" class="notice" role="status" aria-live="polite"></div>
     </header>
 
+    <section class="summary-strip" aria-label="Quick status summary">
+      <article class="summary-card">
+        <span class="summary-label">Connection</span>
+        <span id="summaryStatusValue" class="summary-value">-</span>
+        <span class="summary-note">WhatsApp link state</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">MongoDB</span>
+        <span id="summaryMongoValue" class="summary-value">-</span>
+        <span class="summary-note">Database connectivity</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Uptime</span>
+        <span id="summaryUptimeValue" class="summary-value">-</span>
+        <span class="summary-note">Runtime duration</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Logs</span>
+        <span id="summaryLogsValue" class="summary-value">-</span>
+        <span class="summary-note">Buffered / active streams</span>
+      </article>
+    </section>
+
     <main class="sections">
+      <section id="start" class="panel panel-intro">
+        <div class="panel-head">
+          <h2>Start here</h2>
+          <p>Follow this order to stay oriented and avoid unnecessary clicks.</p>
+        </div>
+        <div class="help-grid">
+          <article class="help-card">
+            <span class="help-step">1</span>
+            <h3>Check the connection</h3>
+            <p>Use the top status chip and the overview section to see whether the bot is online.</p>
+          </article>
+          <article class="help-card">
+            <span class="help-step">2</span>
+            <h3>Scan QR only when needed</h3>
+            <p>If the bot is disconnected, start live QR and scan it from WhatsApp.</p>
+          </article>
+          <article class="help-card">
+            <span class="help-step">3</span>
+            <h3>Make changes carefully</h3>
+            <p>Update settings or roles, then confirm the result in logs and health.</p>
+          </article>
+        </div>
+      </section>
+
       <section id="overview" class="panel">
         <div class="panel-head">
-          <h2>Overview</h2>
-          <p>Live status, QR authentication, and outbound message dispatch.</p>
+          <h2>Connection</h2>
+          <p>Check WhatsApp state, reconnect with QR, and send a quick test message.</p>
         </div>
         <div class="grid">
           <article class="tile w4">
-            <h3>Runtime Status</h3>
+            <h3>Live Status</h3>
             <div class="stat-list">
               <div class="stat">
                 <span class="label">Status</span>
@@ -53,11 +101,11 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
           </article>
 
           <article class="tile w4">
-            <h3>QR Authentication</h3>
+            <h3>Scan QR</h3>
             <div class="qr-box">
               <img id="qrImage" alt="QR Code" />
             </div>
-            <p class="meta" id="qrState">Waiting for data.</p>
+            <p class="meta" id="qrState">Use this only when the bot is disconnected.</p>
             <div class="btn-row">
               <button id="refreshQrBtn" type="button">Refresh QR</button>
               <button id="toggleQrStreamBtn" class="primary" type="button">Start Live QR</button>
@@ -65,7 +113,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
           </article>
 
           <article class="tile w4">
-            <h3>Send Message</h3>
+            <h3>Send Test Message</h3>
             <form id="messageForm">
               <div class="field">
                 <label for="messageJid">Target JID</label>
@@ -79,15 +127,15 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 <button class="primary" type="submit">Send</button>
               </div>
             </form>
-            <p class="meta" id="messageFeedback">No message sent yet.</p>
+            <p class="meta" id="messageFeedback">Use a real JID, then send a short test message.</p>
           </article>
         </div>
       </section>
 
       <section id="operations" class="panel">
         <div class="panel-head">
-          <h2>Operations</h2>
-          <p>Runtime health, service connectivity, and configuration metadata.</p>
+          <h2>Health & system</h2>
+          <p>See whether the bot, database, and process are healthy at a glance.</p>
         </div>
         <div class="grid">
           <article class="tile w4">
@@ -113,7 +161,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
           </article>
 
           <article class="tile w4">
-            <h3>Connectivity</h3>
+            <h3>Service Health</h3>
             <div class="stat-list">
               <div class="stat">
                 <span class="label">MongoDB</span>
@@ -135,7 +183,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
           </article>
 
           <article class="tile w4">
-            <h3>Configuration</h3>
+            <h3>Config Snapshot</h3>
             <div class="stat-list">
               <div class="stat">
                 <span class="label">Name / Prefix</span>
@@ -163,19 +211,19 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
 
       <section id="analytics" class="panel">
         <div class="panel-head">
-          <h2>Analytics</h2>
-          <p>Command usage and game leaderboard from existing bot data stores.</p>
+          <h2>Usage & games</h2>
+          <p>See what people use most and check game rankings without digging through collections.</p>
         </div>
         <div class="grid">
           <article class="tile w8">
             <h3>Command Usage</h3>
             <div class="row">
               <div class="field" style="grid-column: span 8;">
-                <label for="usageSearch">Filter</label>
-                <input id="usageSearch" placeholder="Search command name" />
+                <label for="usageSearch">Filter commands</label>
+                <input id="usageSearch" placeholder="Search by command name" />
               </div>
               <div class="field" style="grid-column: span 4; align-self: end;">
-                <button id="refreshUsageBtn" type="button">Reload Usage</button>
+                <button id="refreshUsageBtn" type="button">Refresh Usage</button>
               </div>
             </div>
             <div class="table-wrap">
@@ -191,11 +239,11 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 <tbody id="usageTableBody"></tbody>
               </table>
             </div>
-            <p class="meta" id="usageMeta">No data loaded.</p>
+            <p class="meta" id="usageMeta">Shows the most used commands first.</p>
           </article>
 
           <article class="tile w4">
-            <h3>Leaderboard</h3>
+            <h3>Game Leaderboard</h3>
             <div class="row">
               <div class="field" style="grid-column: span 7;">
                 <label for="leaderboardGame">Game</label>
@@ -205,12 +253,12 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 </select>
               </div>
               <div class="field" style="grid-column: span 5;">
-                <label for="leaderboardLimit">Rows</label>
+                <label for="leaderboardLimit">Rows to show</label>
                 <input id="leaderboardLimit" type="number" min="1" max="50" value="10" />
               </div>
             </div>
             <div class="btn-row">
-              <button id="refreshLeaderboardBtn" type="button">Load Leaderboard</button>
+              <button id="refreshLeaderboardBtn" type="button">Refresh Leaderboard</button>
             </div>
             <div class="table-wrap">
               <table>
@@ -225,19 +273,20 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 <tbody id="leaderboardBody"></tbody>
               </table>
             </div>
-            <p class="meta" id="leaderboardMeta">No leaderboard loaded.</p>
+            <p class="meta" id="leaderboardMeta">Pick a game, then load the latest scores.</p>
           </article>
         </div>
       </section>
 
       <section id="configuration" class="panel">
         <div class="panel-head">
-          <h2>Configuration</h2>
-          <p>Edit runtime configuration and role assignments without redeploy.</p>
+          <h2>Settings & roles</h2>
+          <p>Change bot settings and access roles in one place, then verify the result in health and logs.</p>
         </div>
         <div class="grid">
           <article class="tile w8">
             <h3>Bot Configuration</h3>
+            <p class="meta">Only change values you recognize. Saved changes apply immediately.</p>
             <form id="configForm">
               <div class="row">
                 <div class="field" style="grid-column: span 6;">
@@ -268,22 +317,22 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
               <div class="row">
                 <div class="field inline" style="grid-column: span 4;">
                   <input id="cfgAllowFromMe" type="checkbox" />
-                  <label for="cfgAllowFromMe">Allow From Me</label>
+                  <label for="cfgAllowFromMe">Allow messages from bot account</label>
                 </div>
                 <div class="field inline" style="grid-column: span 4;">
                   <input id="cfgAllowMentionPrefix" type="checkbox" />
-                  <label for="cfgAllowMentionPrefix">Allow Mention Prefix</label>
+                  <label for="cfgAllowMentionPrefix">Allow mention prefix</label>
                 </div>
                 <div class="field inline" style="grid-column: span 4;">
                   <input id="cfgDisableWarning" type="checkbox" />
-                  <label for="cfgDisableWarning">Disable Warning</label>
+                  <label for="cfgDisableWarning">Suppress command warning</label>
                 </div>
               </div>
 
               <div class="row">
                 <div class="field inline" style="grid-column: span 6;">
                   <input id="cfgMaintenanceMode" type="checkbox" />
-                  <label for="cfgMaintenanceMode">Maintenance Mode</label>
+                  <label for="cfgMaintenanceMode">Maintenance mode</label>
                 </div>
               </div>
 
@@ -292,11 +341,12 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 <button id="resetConfigBtn" class="ghost" type="button">Reset to Defaults</button>
               </div>
             </form>
-            <p class="meta" id="configFeedback">No changes submitted.</p>
+            <p class="meta" id="configFeedback">Changes are saved to the bot configuration store.</p>
           </article>
 
           <article class="tile w4">
             <h3>Role Management</h3>
+            <p class="meta">Add or remove one user at a time. Use a valid WhatsApp JID.</p>
             <form id="roleForm">
               <div class="field">
                 <label for="roleAction">Action</label>
@@ -306,7 +356,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 </select>
               </div>
               <div class="field">
-                <label for="roleType">Role</label>
+                <label for="roleType">Role to change</label>
                 <select id="roleType">
                   <option value="admin">admin</option>
                   <option value="moderator">moderator</option>
@@ -321,15 +371,15 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 <button class="primary" type="submit">Apply Role Change</button>
               </div>
             </form>
-            <p class="meta" id="roleFeedback">No role updates yet.</p>
+            <p class="meta" id="roleFeedback">Role changes update the saved config immediately.</p>
           </article>
         </div>
       </section>
 
       <section id="logs" class="panel">
         <div class="panel-head">
-          <h2>Logs</h2>
-          <p>Live and historical bot logs from the in-memory log buffer.</p>
+          <h2>Debug logs</h2>
+          <p>Inspect live or recent logs to understand what happened and why.</p>
         </div>
         <div class="grid">
           <article class="tile w12" style="grid-column: 1 / -1;">
@@ -346,8 +396,8 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
                 </select>
               </div>
               <div class="field" style="grid-column: span 5;">
-                <label for="logQuery">Search</label>
-                <input id="logQuery" placeholder="Filter log message" />
+                <label for="logQuery">Search logs</label>
+                <input id="logQuery" placeholder="Filter by message text" />
               </div>
               <div class="field" style="grid-column: span 4; align-self: end;">
                 <div class="btn-row">
@@ -361,7 +411,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
               <button id="clearLogBufferBtn" class="ghost" type="button">Clear Buffer</button>
             </div>
             <div id="logsOutput" class="log-shell" role="log" aria-live="polite"></div>
-            <p class="meta" id="logsMeta">No logs loaded.</p>
+            <p class="meta" id="logsMeta">Live view updates as new events arrive. Buffer clears on restart.</p>
           </article>
         </div>
       </section>
