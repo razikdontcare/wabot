@@ -75,22 +75,22 @@ type CobaltRequestBody = {
 
 export class deprecated_DownloaderCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
-    name: "downloader_old",
-    aliases: ["cobalt"],
+    name: "cobalt",
+    aliases: ["cb"],
     description:
       "[DEPRECATED] Download video atau gambar dari platform yang didukung.",
     helpText: `*Penggunaan:*
-• ${BotConfig.prefix}downloader_old <url> — Download video atau gambar
+• ${BotConfig.prefix}cobalt <url> — Download video atau gambar
 
 *Contoh:*
-${BotConfig.prefix}downloader_old https://vt.tiktok.com/ZSrG9QPK7/`,
+${BotConfig.prefix}cobalt https://vt.tiktok.com/ZSrG9QPK7/`,
     category: "general",
     commandClass: deprecated_DownloaderCommand,
     cooldown: 10000,
     maxUses: 3,
     vipBypassCooldown: true, // VIP users bypass cooldown
-    disabled: true,
-    disabledReason: "Diganti dengan YTDL sebagai all-in-one downloader",
+    disabled: false,
+    //disabledReason: "Diganti dengan YTDL sebagai all-in-one downloader",
   };
 
   private BASE_URL = "http://cobalt:9000";
@@ -288,7 +288,7 @@ ${BotConfig.prefix}downloader_old https://vt.tiktok.com/ZSrG9QPK7/`,
               // Convert MP3 to OGG for PTT
               const oggBuffer = Buffer.from(await convertMp3ToOgg(audioBuffer));
               await sock.sendMessage(jid, {
-                  audio: oggBuffer,
+                audio: oggBuffer,
 
                 mimetype: "audio/mp4",
                 ptt: false,
