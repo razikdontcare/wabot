@@ -113,6 +113,18 @@ export function clearRecentLogs(): void {
   logBuffer.length = 0;
 }
 
+export function getLogBufferStats(): {
+  currentSize: number;
+  maxSize: number;
+  subscriberCount: number;
+} {
+  return {
+    currentSize: logBuffer.length,
+    maxSize: LOG_BUFFER_SIZE,
+    subscriberCount: logSubscribers.size,
+  };
+}
+
 export class Logger {
   protected readonly level: LogLevel;
   protected readonly displayTimestamp: boolean;
