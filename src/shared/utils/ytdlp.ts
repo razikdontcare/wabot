@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { promises as fs } from "fs";
+import { createReadStream, promises as fs } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
@@ -67,6 +67,8 @@ export interface YtDlpOptions {
   proxy?: string;
   // Use system proxy
   useSystemProxy?: boolean;
+  // Custom user agent
+  userAgent?: string;
 }
 
 export interface YtDlpResult {
@@ -75,12 +77,23 @@ export interface YtDlpResult {
   metadata?: YtDlpVideoInfo;
 }
 
+export interface YtDlpFileResult {
+  filePath: string;
+  filename: string;
+  size: number;
+  metadata?: YtDlpVideoInfo;
+  cleanup: () => Promise<void>;
+}
+
 export interface YtDlpStreamResult {
   stream: Readable;
   filename: string;
   metadata?: YtDlpVideoInfo;
   // Promise that resolves when the process closes
   wait: () => Promise<void>;
+  filePath: string;
+  size: number;
+  cleanup: () => Promise<void>;
 }
 
 /**
@@ -115,6 +128,9 @@ export class YtDlpWrapper {
 
     if (options.proxy) {
       args.push("--proxy", options.proxy);
+    }
+    if (options.userAgent) {
+      args.push("--user-agent", options.userAgent);
     }
 
     args.push(url);
@@ -230,58 +246,74 @@ export class YtDlpWrapper {
     url: string,
     options: YtDlpOptions = {},
   ): Promise<YtDlpStreamResult> {
-    const metadata =
-      options.videoInfo || (await this.getVideoInfo(url, options));
+    const fileResult = await this.downloadToFile(url, options);
+    return {
+      stream: createReadStream(fileResult.filePath),
+      filename: fileResult.filename,
+      metadata: fileResult.metadata,
+      wait: async () => {},
+      filePath: fileResult.filePath,
+      size: fileResult.size,
+      cleanup: fileResult.cleanup,
+    };
+  }
 
-    if (metadata.duration && metadata.duration > this.MAX_DURATION) {
+  async downloadToFile(
+    url: string,
+    options: YtDlpOptions = {},
+  ): Promise<YtDlpFileResult> {
+    let metadata = options.videoInfo;
+    if (!metadata && !options.skipInfoFetch) {
+      metadata = await this.getVideoInfo(url, options);
+    }
+
+    if (metadata?.duration && metadata.duration > this.MAX_DURATION) {
       throw new Error(
         `Video too long: ${Math.round(metadata.duration / 60)} minutes (max: ${this.MAX_DURATION / 60} minutes)`,
       );
     }
 
-    if (metadata.is_live) {
+    if (metadata?.is_live) {
       throw new Error("Live streams are not supported");
     }
 
-    const ext = options.audioOnly ? "mp3" : "mp4";
-    const filename = `${metadata.title || "download"}.${ext}`;
+    const tempId = randomUUID();
+    const tempDir = tmpdir();
+    const outputTemplate = join(tempDir, `ytdlp_${tempId}.%(ext)s`);
 
-    const streamOptions = { ...options, streamToStdout: true };
-    const args = this.buildArgs(url, "-", streamOptions, !!options.onProgress);
+    const args = this.buildArgs(
+      url,
+      outputTemplate,
+      options,
+      !!options.onProgress,
+    );
 
-    const process = spawn(args[0], args.slice(1), {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    try {
+      await this.executeCommandWithTimeout(
+        args,
+        this.DOWNLOAD_TIMEOUT,
+        options.onProgress,
+      );
 
-    if (options.onProgress) {
-      process.stderr?.on("data", (data) => {
-        this.parseProgress(data.toString(), options.onProgress!);
-      });
+      const downloadedFile = await this.findDownloadedFile(tempDir, tempId);
+      if (!downloadedFile) {
+        throw new Error("Downloaded file not found");
+      }
+
+      const stats = await fs.stat(downloadedFile.path);
+      const cleanup = () => this.cleanupTempFiles(tempDir, tempId);
+
+      return {
+        filePath: downloadedFile.path,
+        filename: downloadedFile.name,
+        size: stats.size,
+        metadata: metadata || { id: "", title: "" },
+        cleanup,
+      };
+    } catch (error) {
+      await this.cleanupTempFiles(tempDir, tempId);
+      throw new Error(`yt-dlp failed: ${error}`);
     }
-
-    process.on("error", (error) => {
-      log.error("yt-dlp process error:", error);
-    });
-
-    const wait = () =>
-      new Promise<void>((resolve, reject) => {
-        process.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`yt-dlp exited with code ${code}`));
-        });
-        process.on("error", reject);
-        setTimeout(
-          () => reject(new Error("Wait timeout")),
-          this.DOWNLOAD_TIMEOUT,
-        );
-      });
-
-    return {
-      stream: process.stdout,
-      filename,
-      metadata,
-      wait,
-    };
   }
 
   async downloadVideo(url: string): Promise<YtDlpResult> {
@@ -337,6 +369,9 @@ export class YtDlpWrapper {
 
     if (options.proxy) {
       args.push("--proxy", options.proxy);
+    }
+    if (options.userAgent) {
+      args.push("--user-agent", options.userAgent);
     }
 
     const concurrentFragments = options.concurrentFragments || 5;

@@ -9,7 +9,11 @@ import {
   DownloadProgress,
 } from "../../shared/utils/ytdlp.js";
 import extractUrlsFromText from "../../shared/utils/extractUrlsFromText.js";
-import { Readable } from "stream";
+import { createReadStream } from "fs";
+import {
+  registerPublicDownload,
+  removePublicDownload,
+} from "../../shared/utils/publicDownloadStore.js";
 
 export class DownloaderCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
@@ -20,6 +24,7 @@ export class DownloaderCommand extends CommandInterface {
     helpText: `*Usage:*
 • ${BotConfig.prefix}dl <url> — Download video or audio from YouTube, TikTok, IG, or other supported platforms.
 • reply pesan lain yang berisi URL dengan ${BotConfig.prefix}dl
+• ${BotConfig.prefix}dl --default-ua <url> — Gunakan user-agent default yt-dlp (untuk TikTok jika curl UA gagal)
 
 *Example:*
 • ${BotConfig.prefix}dl https://vt.tiktok.com/ZSrG9QPK7/
@@ -35,6 +40,7 @@ export class DownloaderCommand extends CommandInterface {
   private readonly SEND_TIMEOUT = 300000; // 5 minutes timeout
   private readonly MAX_MEDIA_SIZE_MB = 100; // Limit for normal media send
   private readonly MAX_DOCUMENT_SIZE_MB = 1000; // 1GB absolute limit
+  private readonly TIKTOK_USER_AGENT = "curl/8.4.0";
 
   async handleCommand(
     args: string[],
@@ -53,6 +59,7 @@ export class DownloaderCommand extends CommandInterface {
 
     let downloadMode: "audio" | "video" = "video";
     let sendAsDocument = false;
+    let useDefaultUserAgent = false;
 
     const flags = args.map((a) => a.toLowerCase());
     if (flags.some((a) => ["audio", "a", "-a", "--audio", "mp3"].includes(a)))
@@ -65,14 +72,19 @@ export class DownloaderCommand extends CommandInterface {
       )
     )
       sendAsDocument = true;
-
-    if (flags.some((a) => ["ad", "da", "-ad", "-da"].includes(a))) {
-      downloadMode = "audio";
-      sendAsDocument = true;
-    }
-    if (flags.some((a) => ["vd", "dv", "-vd", "-dv"].includes(a))) {
-      downloadMode = "video";
-      sendAsDocument = true;
+    if (
+      flags.some((a) =>
+        [
+          "default-ua",
+          "--default-ua",
+          "native-ua",
+          "--native-ua",
+          "ytdlp-ua",
+          "--ytdlp-ua",
+        ].includes(a),
+      )
+    ) {
+      useDefaultUserAgent = true;
     }
     log.info("Download mode set to:", downloadMode);
 
@@ -112,6 +124,7 @@ export class DownloaderCommand extends CommandInterface {
 
       const videoInfo: YtDlpVideoInfo = await this.ytdl.getVideoInfo(url, {
         proxy: isTikTok ? process.env.PROXY : undefined,
+        userAgent: isTikTok && !useDefaultUserAgent ? this.TIKTOK_USER_AGENT : undefined,
       });
 
       const handleProgress = async (progress: DownloadProgress) => {
@@ -177,54 +190,21 @@ export class DownloaderCommand extends CommandInterface {
         });
       }
 
-      const bestFormat =
-        videoInfo?.formats?.find((f) => f.format_id === videoInfo.format_id) ||
-        videoInfo;
-      const protocol = (bestFormat?.protocol as string) || "";
-      const isFragmentedProtocol =
-        protocol.includes("m3u8") ||
-        protocol.includes("dash") ||
-        protocol.includes("mhtml");
-      const useBuffer =
-        isFragmentedProtocol && downloadMode === "video" && !sendAsDocument;
-
-      log.info(
-        `Adaptive Strategy: protocol=${protocol}, useBuffer=${useBuffer}`,
-      );
-
-      let mediaBuffer: Buffer | null = null;
-      let mediaStream: Readable | null = null;
-      let waitFn: (() => Promise<void>) | null = null;
-
-      if (useBuffer) {
-        log.info(
-          "Using downloadToBuffer for fragmented protocol to ensure playability",
-        );
-        const result = await this.ytdl.downloadToBuffer(url, {
-          audioOnly: downloadMode === "audio",
-          proxy: isTikTok ? process.env.PROXY : undefined,
-          onProgress: handleProgress,
-          videoInfo: videoInfo,
-        });
-        mediaBuffer = result.buffer;
-      } else {
-        log.info("Using downloadAsStream for direct/audio protocol");
-        const result = await this.ytdl.downloadAsStream(url, {
-          audioOnly: downloadMode === "audio",
-          useAria2c: false,
-          concurrentFragments: 5,
-          proxy: isTikTok ? process.env.PROXY : undefined,
-          onProgress: handleProgress,
-          videoInfo: videoInfo,
-        });
-        mediaStream = result.stream;
-        waitFn = result.wait;
-      }
+      log.info("Using file-based download to ensure playability");
+      const downloadResult = await this.ytdl.downloadToFile(url, {
+        audioOnly: downloadMode === "audio",
+        useAria2c: false,
+        concurrentFragments: 5,
+        proxy: isTikTok ? process.env.PROXY : undefined,
+        onProgress: handleProgress,
+        videoInfo: videoInfo,
+        userAgent: isTikTok && !useDefaultUserAgent ? this.TIKTOK_USER_AGENT : undefined,
+      });
 
       const durationText = this.formatDuration(videoInfo?.duration || 0);
       const title = videoInfo?.title || "Unknown";
 
-      const fileSize =
+      const fileSize = downloadResult.size ||
         (videoInfo?.filesize as number) ||
         (videoInfo?.filesize_approx as number) ||
         0;
@@ -234,46 +214,68 @@ export class DownloaderCommand extends CommandInterface {
         await sock.sendMessage(jid, {
           text: `❌ File terlalu besar (${fileSizeMB.toFixed(1)}MB). Maksimal limit bot adalah ${this.MAX_DOCUMENT_SIZE_MB}MB.`,
         });
-        if (mediaStream) mediaStream.destroy();
+        await downloadResult.cleanup();
         return;
       }
 
-      if (fileSizeMB > this.MAX_MEDIA_SIZE_MB && !sendAsDocument) {
-        sendAsDocument = true;
-        await sock.sendMessage(jid, {
-          text: `ℹ️ Ukuran file (${fileSizeMB.toFixed(1)}MB) melebihi batas media WA (100MB). Mengalihkan pengiriman sebagai *dokumen*...`,
+      const normalizedTitle = this.normalizeFilename(title);
+      const fileExtension = downloadMode === "audio" ? "mp3" : "mp4";
+      const fileName = `${normalizedTitle}.${fileExtension}`;
+      const mimeType = downloadMode === "audio" ? "audio/mpeg" : "video/mp4";
+
+      if (fileSizeMB > this.MAX_MEDIA_SIZE_MB) {
+        const entry = registerPublicDownload({
+          filePath: downloadResult.filePath,
+          filename: fileName,
+          size: fileSize,
+          mimeType,
         });
+        const baseUrl = this.getPublicDownloadBaseUrl();
+        const link = `${baseUrl}/downloads/${entry.token}`;
+        const expiresInSeconds = Math.max(
+          0,
+          Math.floor((entry.expiresAt - Date.now()) / 1000),
+        );
+        const expiresText = this.formatDuration(expiresInSeconds);
+
+        try {
+          await sock.sendMessage(jid, {
+            text: `📦 File terlalu besar untuk dikirim lewat WhatsApp.\n🔗 Link download: ${link}\n⏳ Berlaku selama ${expiresText}.`,
+          });
+          if (progressMessageKey) {
+            await sock.sendMessage(jid, {
+              text: `✅ Download selesai!\n📹 *${title}*\n⏱️ Durasi: ${durationText}\n🔗 ${link}`,
+              edit: progressMessageKey,
+            });
+          }
+          return;
+        } catch (error) {
+          await removePublicDownload(entry.token);
+          throw error;
+        }
       }
 
-      const mediaSource: WAMediaUpload = mediaBuffer || {
-        stream: mediaStream!,
-      };
+      const mediaStream = createReadStream(downloadResult.filePath);
+      const mediaSource: WAMediaUpload = { stream: mediaStream };
 
-      if (downloadMode === "audio") {
-        try {
+      try {
+        if (downloadMode === "audio") {
           if (sendAsDocument) {
             const message: AnyMessageContent = {
               document: mediaSource,
               mimetype: "audio/mp3",
-              fileName: this.normalizeFilename(title) + ".mp3",
+              fileName,
             };
             await this.sendWithTimeout(sock, jid, message);
           } else {
             const message: AnyMessageContent = {
               audio: mediaSource,
               mimetype: "audio/mp4",
-              fileName: this.normalizeFilename(title) + ".mp3",
+              fileName,
             };
             await this.sendWithTimeout(sock, jid, message);
           }
-        } catch (error) {
-          log.error("Failed to send audio:", error);
-          await sock.sendMessage(jid, {
-            text: "Gagal mengirim audio. File mungkin terlalu besar atau koneksi timeout.",
-          });
-        }
-      } else {
-        try {
+        } else {
           if (fileSizeMB > 50) {
             await sock.sendMessage(jid, {
               text: "Mengirim video besar, mohon tunggu maksimal 5 menit.",
@@ -284,18 +286,25 @@ export class DownloaderCommand extends CommandInterface {
             const message: AnyMessageContent = {
               document: mediaSource,
               mimetype: "video/mp4",
-              fileName: this.normalizeFilename(title) + ".mp4",
+              fileName,
             };
             await this.sendWithTimeout(sock, jid, message);
           } else {
             const message: AnyMessageContent = {
               video: mediaSource,
               mimetype: "video/mp4",
-              fileName: this.normalizeFilename(title) + ".mp4",
+              fileName,
             };
             await this.sendWithTimeout(sock, jid, message);
           }
-        } catch (error) {
+        }
+      } catch (error) {
+        if (downloadMode === "audio") {
+          log.error("Failed to send audio:", error);
+          await sock.sendMessage(jid, {
+            text: "Gagal mengirim audio. File mungkin terlalu besar atau koneksi timeout.",
+          });
+        } else {
           log.error("Failed to send video:", error);
           if (error instanceof Error && error.message.includes("timeout")) {
             await sock.sendMessage(jid, {
@@ -307,10 +316,9 @@ export class DownloaderCommand extends CommandInterface {
             });
           }
         }
-      }
-
-      if (waitFn) {
-        await waitFn().catch((e) => log.warn("yt-dlp wait error:", e));
+      } finally {
+        mediaStream.destroy();
+        await downloadResult.cleanup();
       }
 
       if (progressMessageKey) {
@@ -384,6 +392,12 @@ export class DownloaderCommand extends CommandInterface {
     if (secs > 0 || parts.length === 0) parts.push(`${secs} detik`);
 
     return parts.join(" ");
+  }
+
+  private getPublicDownloadBaseUrl(): string {
+    const baseUrl = process.env.PUBLIC_DOWNLOAD_BASE_URL ||
+      `http://${process.env.BOT_HOST || "localhost"}:${process.env.BOT_PORT || 5000}`;
+    return baseUrl.replace(/\/$/, ""); // Remove trailing slash
   }
 
   private isTikTokUrl(input: string): boolean {

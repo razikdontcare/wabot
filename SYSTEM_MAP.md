@@ -82,6 +82,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/infrastructure/config/mongo.ts` | Atomic MongoDB client connection management | `getMongoClient`, `isMongoConnected` | #infra | #infra |
 | `src/infrastructure/config/scheduler.ts` | Initializes cron jobs | `scheduleVIPCleanup`, etc. | #infra | #bot |
 | `src/infrastructure/web/adminConsolePage.ts` | HTML rendering for admin dashboard | `renderAdminConsoleHtml` | #infra | #web |
+| `src/infrastructure/web/adminConsoleBody.ts` | Admin console body markup | `ADMIN_CONSOLE_BODY` | #infra | #web |
+| `src/infrastructure/web/adminConsoleStyles.ts` | Admin console stylesheet string | `ADMIN_CONSOLE_STYLES` | #infra | #web |
+| `src/infrastructure/web/adminConsoleScript.ts` | Admin console client logic | `ADMIN_CONSOLE_SCRIPT` | #infra | #web |
 
 ### Shared Layer & Root
 | Path | Purpose | Exports | #layer | #domain |
@@ -98,11 +101,14 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | Method | Path | Description | Auth Required |
 | :--- | :--- | :--- | :--- |
 | GET | `/admin` | Admin Console Dashboard | Yes |
+| GET | `/admin/styles.css` | Admin Console Stylesheet | Yes |
+| GET | `/admin/app.js` | Admin Console Client Script | Yes |
 | GET | `/api/logs` | Fetch recent bot logs | Yes |
 | POST | `/api/logs/clear` | Clear log buffer | Yes |
 | GET | `/api/logs/stream` | SSE stream for live logs | Yes |
 | GET | `/api/command-usage` | Get command usage stats | Yes |
 | GET | `/api/leaderboard` | Get game leaderboards | Yes |
+| GET | `/api/ops` | Get runtime ops summary | Yes |
 | POST | `/api/send-message` | Send a WhatsApp message via bot | Yes |
 | GET | `/api/config` | Get bot configuration | Yes |
 | POST | `/api/config` | Update bot configuration | Yes |

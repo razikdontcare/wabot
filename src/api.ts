@@ -30,13 +30,22 @@ import {
 } from "./infrastructure/config/config.js";
 import {
   clearRecentLogs,
+  getLogBufferStats,
   getRecentLogs,
   isLogLevel,
   LogLevel,
   subscribeToLogs,
 } from "./shared/logger/logger.js";
 import { renderAdminConsoleHtml } from "./infrastructure/web/adminConsolePage.js";
+import { ADMIN_CONSOLE_SCRIPT } from "./infrastructure/web/adminConsoleScript.js";
+import { ADMIN_CONSOLE_STYLES } from "./infrastructure/web/adminConsoleStyles.js";
+import { isMongoConnected } from "./infrastructure/config/mongo.js";
 import QRCode from "qrcode";
+import { createReadStream } from "fs";
+import {
+  getPublicDownload,
+  startCleanupSchedule,
+} from "./shared/utils/publicDownloadStore.js";
 
 const app = new Hono();
 
@@ -95,6 +104,20 @@ function parseLimit(
   return Math.max(1, Math.min(parsed, max));
 }
 
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || parts.length > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length > 0) parts.push(`${minutes}m`);
+  parts.push(`${secs}s`);
+  return parts.join(" ");
+}
+
 function cleanupLogConnection(connection: LogStreamConnection): void {
   if (!logConnections.has(connection)) return;
   logConnections.delete(connection);
@@ -105,6 +128,22 @@ function cleanupLogConnection(connection: LogStreamConnection): void {
 app.get("/", (c) => c.redirect("/admin"));
 app.get("/admin", (c) => c.html(renderAdminConsoleHtml()));
 app.get("/admin/", (c) => c.html(renderAdminConsoleHtml()));
+app.get("/admin/styles.css", () => {
+  return new Response(ADMIN_CONSOLE_STYLES, {
+    headers: {
+      "Content-Type": "text/css; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+});
+app.get("/admin/app.js", () => {
+  return new Response(ADMIN_CONSOLE_SCRIPT, {
+    headers: {
+      "Content-Type": "application/javascript; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+});
 
 // REST API: Get recent bot logs
 app.get("/api/logs", async (c) => {
@@ -247,10 +286,11 @@ app.get("/api/command-usage", async (c) => {
 app.get("/api/leaderboard", async (c) => {
   const game = c.req.query("game");
   if (!game) return c.json({ error: "Missing 'game' query param" }, 400);
+  const limit = parseLimit(c.req.query("limit"), 10, 50);
   try {
     const client = await getMongoClient();
     const leaderboardService = new GameLeaderboardService(client);
-    const leaderboard = await leaderboardService.getLeaderboard(game, 10);
+    const leaderboard = await leaderboardService.getLeaderboard(game, limit);
     return c.json(leaderboard);
   } catch {
     return c.json({ error: "Failed to fetch leaderboard" }, 500);
@@ -566,6 +606,123 @@ app.get("/api/status", async (c) => {
     return c.json({ status: "error", connected: false }, 500);
   }
 });
+
+app.get("/api/ops", async (c) => {
+  try {
+    const botRuntime = asBotRuntime(getBotClient());
+    const botSock = botRuntime?.sock;
+    const hasQR = Boolean(botRuntime?.currentQR);
+    const connected = Boolean(botSock?.user);
+    const status = botRuntime
+      ? connected
+        ? "connected"
+        : hasQR
+          ? "qr_ready"
+          : "disconnected"
+      : "unavailable";
+
+    const configService = await getBotConfigService();
+    const [mergedConfig, storedConfig] = await Promise.all([
+      configService.getMergedConfig(),
+      configService.getConfig(),
+    ]);
+
+    const logStats = getLogBufferStats();
+    const processMemory = process.memoryUsage();
+    const uptimeSeconds = Math.floor(process.uptime());
+
+    return c.json({
+      timestamp: Date.now(),
+      process: {
+        pid: process.pid,
+        uptimeSeconds,
+        uptimeText: formatUptime(uptimeSeconds),
+        nodeVersion: process.version,
+        memory: {
+          rss: processMemory.rss,
+          heapUsed: processMemory.heapUsed,
+          heapTotal: processMemory.heapTotal,
+          external: processMemory.external,
+        },
+      },
+      bot: {
+        status,
+        connected,
+        hasQR,
+        user: connected ? botSock?.user : null,
+      },
+      mongo: {
+        connected: isMongoConnected(),
+      },
+      streams: {
+        qr: qrConnections.size,
+        logs: logConnections.size,
+      },
+      logs: {
+        buffered: logStats.currentSize,
+        capacity: logStats.maxSize,
+        subscribers: logStats.subscriberCount,
+      },
+      config: {
+        name: mergedConfig.name,
+        prefix: mergedConfig.prefix,
+        maintenanceMode: mergedConfig.maintenanceMode,
+        lastUpdated: storedConfig.lastUpdated || null,
+        updatedBy: storedConfig.updatedBy || null,
+        roleCounts: {
+          admins: mergedConfig.admins.length,
+          moderators: mergedConfig.moderators.length,
+          vips: mergedConfig.vips.length,
+        },
+      },
+    });
+  } catch {
+    return c.json({ error: "Failed to fetch ops summary" }, 500);
+  }
+});
+
+// Public endpoint: Download media by token (no auth required)
+app.get("/downloads/:token", async (c) => {
+  try {
+    const token = c.req.param("token");
+
+    if (!token || typeof token !== "string" || token.length !== 32) {
+      return c.json({ error: "Invalid token format" }, 400);
+    }
+
+    const entry = getPublicDownload(token);
+
+    if (!entry) {
+      return c.json(
+        {
+          error: "Download not found or expired",
+          message: "The download link may have expired. Downloads are valid for 24 hours.",
+        },
+        404,
+      );
+    }
+
+    const fileStream = createReadStream(entry.filePath);
+
+    // Set response headers for file download
+    c.header("Content-Type", entry.mimeType);
+    c.header("Content-Length", entry.size.toString());
+    c.header("Content-Disposition", `attachment; filename="${entry.filename}"`);
+    c.header("Cache-Control", "no-cache, no-store, must-revalidate");
+    c.header("Pragma", "no-cache");
+    c.header("Expires", "0");
+
+    return c.body(fileStream as never);
+  } catch (error) {
+    return c.json(
+      { error: "Failed to serve download", details: String(error) },
+      500,
+    );
+  }
+});
+
+// Start cleanup scheduler on API startup
+startCleanupSchedule();
 
 serve({
   fetch: app.fetch,
