@@ -41,6 +41,11 @@ import { ADMIN_CONSOLE_SCRIPT } from "./infrastructure/web/adminConsoleScript.js
 import { ADMIN_CONSOLE_STYLES } from "./infrastructure/web/adminConsoleStyles.js";
 import { isMongoConnected } from "./infrastructure/config/mongo.js";
 import QRCode from "qrcode";
+import { createReadStream } from "fs";
+import {
+  getPublicDownload,
+  startCleanupSchedule,
+} from "./shared/utils/publicDownloadStore.js";
 
 const app = new Hono();
 
@@ -675,6 +680,49 @@ app.get("/api/ops", async (c) => {
     return c.json({ error: "Failed to fetch ops summary" }, 500);
   }
 });
+
+// Public endpoint: Download media by token (no auth required)
+app.get("/downloads/:token", async (c) => {
+  try {
+    const token = c.req.param("token");
+
+    if (!token || typeof token !== "string" || token.length !== 32) {
+      return c.json({ error: "Invalid token format" }, 400);
+    }
+
+    const entry = getPublicDownload(token);
+
+    if (!entry) {
+      return c.json(
+        {
+          error: "Download not found or expired",
+          message: "The download link may have expired. Downloads are valid for 24 hours.",
+        },
+        404,
+      );
+    }
+
+    const fileStream = createReadStream(entry.filePath);
+
+    // Set response headers for file download
+    c.header("Content-Type", entry.mimeType);
+    c.header("Content-Length", entry.size.toString());
+    c.header("Content-Disposition", `attachment; filename="${entry.filename}"`);
+    c.header("Cache-Control", "no-cache, no-store, must-revalidate");
+    c.header("Pragma", "no-cache");
+    c.header("Expires", "0");
+
+    return c.body(fileStream as never);
+  } catch (error) {
+    return c.json(
+      { error: "Failed to serve download", details: String(error) },
+      500,
+    );
+  }
+});
+
+// Start cleanup scheduler on API startup
+startCleanupSchedule();
 
 serve({
   fetch: app.fetch,

@@ -1,6 +1,5 @@
 import { describe, expect, it, mock, spyOn, beforeEach } from "bun:test";
 import { DownloaderCommand } from "../src/app/commands/DownloaderCommand.js";
-import { Readable } from "stream";
 
 describe("DownloaderCommand", () => {
   let command: DownloaderCommand;
@@ -13,31 +12,30 @@ describe("DownloaderCommand", () => {
     };
   });
 
-  it("should switch to document mode for files > 100MB", async () => {
-    const largeMetadata = {
-      title: "Huge Movie",
+  it("should use file-based download for normal files", async () => {
+    const metadata = {
+      title: "Test Video",
       duration: 300,
-      filesize: 150 * 1024 * 1024, // 150MB
+      filesize: 50 * 1024 * 1024, // 50MB
     };
-
-    const mockStream = new Readable({ read() { this.push(null); } });
 
     // Mock ytdl methods
     (command as any).ytdl = {
-      getVideoInfo: mock(async () => largeMetadata),
-      downloadAsStream: mock(async () => ({
-        stream: mockStream,
-        metadata: largeMetadata,
-        filename: "Huge Movie.mp4",
-        wait: async () => {}
+      getVideoInfo: mock(async () => metadata),
+      downloadToFile: mock(async () => ({
+        filePath: "/tmp/test.mp4",
+        filename: "test-video.mp4",
+        size: 50 * 1024 * 1024,
+        metadata: metadata,
+        cleanup: mock(async () => {})
       }))
     };
 
-    // Spy on sendWithTimeout to check if it's called with document
-    const sendSpy = spyOn(command as any, "sendWithTimeout").mockResolvedValue(undefined);
+    // Mock sendWithTimeout
+    const sendSpy = spyOn(command as any, "sendWithTimeout").mockResolvedValue(true);
 
     await command.handleCommand(
-      ["https://youtube.com/watch?v=large"],
+      ["https://youtube.com/watch?v=test"],
       "jid@g.us",
       "user@s.whatsapp.net",
       mockSock,
@@ -45,16 +43,11 @@ describe("DownloaderCommand", () => {
       {} as any
     );
 
-    // Should have sent the informational message
-    const calls = mockSock.sendMessage.mock.calls;
-    const infoCall = calls.find(c => c[1].text?.includes("melebihi batas media WA"));
-    expect(infoCall).toBeDefined();
-
-    // Should have called sendWithTimeout with document instead of video
+    // Should have called sendWithTimeout for the download
     expect(sendSpy).toHaveBeenCalled();
-    const sendArgs = sendSpy.mock.calls[0][2];
-    expect(sendArgs.document).toBeDefined();
-    expect(sendArgs.video).toBeUndefined();
+    
+    // Should have called downloadToFile
+    expect((command as any).ytdl.downloadToFile).toHaveBeenCalled();
   });
 
   it("should reject files > 1GB", async () => {
@@ -64,18 +57,14 @@ describe("DownloaderCommand", () => {
         filesize: 1200 * 1024 * 1024, // 1.2GB
     };
 
-    const mockStream = new Readable({ 
-        read() { this.push(null); }
-    });
-    mockStream.destroy = mock(() => (mockStream as any));
-    
     (command as any).ytdl = {
       getVideoInfo: mock(async () => monsterMetadata),
-      downloadAsStream: mock(async () => ({
-        stream: mockStream,
-        metadata: monsterMetadata,
+      downloadToFile: mock(async () => ({
+        filePath: "/tmp/monster.mp4",
         filename: "Monster.mp4",
-        wait: async () => {}
+        size: 1200 * 1024 * 1024,
+        metadata: monsterMetadata,
+        cleanup: mock(async () => {})
       }))
     };
 
@@ -92,8 +81,5 @@ describe("DownloaderCommand", () => {
     const calls = mockSock.sendMessage.mock.calls;
     const errorCall = calls.find(c => c[1].text?.includes("File terlalu besar") && c[1].text?.includes("limit bot"));
     expect(errorCall).toBeDefined();
-    
-    // Should have destroyed the stream
-    expect(mockStream.destroy).toHaveBeenCalled();
   });
 });
