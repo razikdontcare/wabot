@@ -24,6 +24,18 @@ import {
 import webpmux from "node-webpmux";
 import { WorkerPool } from "../../shared/utils/WorkerPool.js";
 
+// Type definitions
+interface MediaData {
+  buffer: Buffer;
+  mediaType: "image" | "video";
+  sourceExtension: string;
+}
+
+interface DetectedMediaInfo {
+  mediaType: "image" | "video";
+  extension: string;
+}
+
 export class StickerCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
     name: "sticker",
@@ -67,10 +79,20 @@ export class StickerCommand extends CommandInterface {
   private readonly MAX_FILE_SIZE = 16 * 1024 * 1024; // 16MB
   private readonly STICKER_SIZE = 512;
   private readonly URL_FETCH_TIMEOUT = 20000;
+  private readonly MAX_REDIRECT_DEPTH = 3;
+  private readonly PACK_NAME_MAX_LENGTH = 256;
+
+  // Provider constants
+  private readonly PROVIDERS = {
+    GIPHY: "giphy.com",
+    GIPHY_MEDIA: "media.giphy.com",
+    TENOR: "tenor.com",
+  } as const;
+
   private fetchClient = createFetchClient({
     timeout: this.URL_FETCH_TIMEOUT,
     headers: {
-      "User-Agent": "NexaBot/1.0.0",
+      "User-Agent": `${BotConfig.name}/1.0.0`,
       Accept: "*/*",
     },
   });
@@ -87,6 +109,136 @@ export class StickerCommand extends CommandInterface {
       userPreferenceService: this.userPreferenceService,
       vipService,
     };
+  }
+
+  // Helper method to download media from WhatsApp message (eliminates code duplication)
+  private async downloadMediaFromMessage(
+    msg: proto.IWebMessageInfo,
+    sock: WebSocketInfo,
+    jid: string,
+  ): Promise<MediaData | null> {
+    try {
+      // Priority 1: Direct image message
+      if (msg.message?.imageMessage) {
+        const stream = await downloadMediaMessage(
+          <WAMessage>msg,
+          "buffer",
+          {},
+          {
+            logger: log as any,
+            reuploadRequest: sock.updateMediaMessage,
+          },
+        );
+        if (stream) {
+          return {
+            buffer: Buffer.from(stream),
+            mediaType: "image",
+            sourceExtension: "jpg",
+          };
+        }
+      }
+
+      // Priority 2: Direct video message
+      if (msg.message?.videoMessage) {
+        const videoMsg = msg.message.videoMessage;
+        const stream = await downloadMediaMessage(
+          <WAMessage>msg,
+          "buffer",
+          {},
+          {
+            logger: log as any,
+            reuploadRequest: sock.updateMediaMessage,
+          },
+        );
+        if (stream) {
+          const isGif = videoMsg.gifPlayback || videoMsg.mimetype?.toLowerCase().includes("gif");
+          return {
+            buffer: Buffer.from(stream),
+            mediaType: "video",
+            sourceExtension: isGif ? "gif" : "mp4",
+          };
+        }
+      }
+
+      // Priority 3: Quoted message
+      const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+      if (quotedMsg) {
+        const baseQuotedMsg: proto.IWebMessageInfo = {
+          key: {
+            remoteJid: jid,
+            fromMe: !msg.message?.extendedTextMessage?.contextInfo?.participant,
+            id: msg.message?.extendedTextMessage?.contextInfo?.stanzaId || "",
+            participant: msg.message?.extendedTextMessage?.contextInfo?.participant,
+          },
+          message: quotedMsg,
+        };
+
+        // Quoted image
+        if (quotedMsg.imageMessage) {
+          const stream = await downloadMediaMessage(
+            <WAMessage>baseQuotedMsg,
+            "buffer",
+            {},
+            {
+              logger: log as any,
+              reuploadRequest: sock.updateMediaMessage,
+            },
+          );
+          if (stream) {
+            return {
+              buffer: Buffer.from(stream),
+              mediaType: "image",
+              sourceExtension: "jpg",
+            };
+          }
+        }
+
+        // Quoted video
+        if (quotedMsg.videoMessage) {
+          const videoMsg = quotedMsg.videoMessage;
+          const stream = await downloadMediaMessage(
+            <WAMessage>baseQuotedMsg,
+            "buffer",
+            {},
+            {
+              logger: log as any,
+              reuploadRequest: sock.updateMediaMessage,
+            },
+          );
+          if (stream) {
+            const isGif = videoMsg.gifPlayback || videoMsg.mimetype?.toLowerCase().includes("gif");
+            return {
+              buffer: Buffer.from(stream),
+              mediaType: "video",
+              sourceExtension: isGif ? "gif" : "mp4",
+            };
+          }
+        }
+
+        // Reject quoted stickers
+        if (quotedMsg.stickerMessage) {
+          return null; // Special signal handled in main flow
+        }
+      }
+
+      return null;
+    } catch (error) {
+      log.error("Error downloading media from message:", error);
+      return null;
+    }
+  }
+
+  // Validate and sanitize user input for pack/author names
+  private sanitizePackName(name: string): string {
+    return name
+      .slice(0, this.PACK_NAME_MAX_LENGTH)
+      .replace(/[^\w\s\-]/g, "")
+      .trim();
+  }
+
+  // Check if input is valid pack/author name
+  private isValidPackName(name: string): boolean {
+    return name.length > 0 && name.length <= this.PACK_NAME_MAX_LENGTH;
   }
 
   async handleCommand(
@@ -434,47 +586,61 @@ export class StickerCommand extends CommandInterface {
       // Process media to sticker via Worker Pool to keep main thread responsive
       let stickerBuffer: Buffer;
       const workerPool = WorkerPool.getInstance();
-      
+
       // Use helper to get the correct path for worker in both dev and prod
       const getProcessorPath = () => {
-          if (process.env.NODE_ENV === 'production' || process.env.USE_DIST) {
-              return join(process.cwd(), "dist", "shared", "utils", "stickerProcessor.js");
-          }
-          return join(process.cwd(), "src", "shared", "utils", "stickerProcessor.ts");
+        if (process.env.NODE_ENV === "production" || process.env.USE_DIST) {
+          return join(process.cwd(), "dist", "shared", "utils", "stickerProcessor.js");
+        }
+        return join(process.cwd(), "src", "shared", "utils", "stickerProcessor.ts");
       };
-      
+
       const processorPath = getProcessorPath();
 
-      if (mediaType === "video") {
-        // Create animated sticker from video
-        const result = await workerPool.run<Uint8Array>(
+      try {
+        if (mediaType === "video") {
+          // Create animated sticker from video
+          const result = await workerPool.run<Uint8Array>(
+            processorPath,
+            "createAnimatedSticker",
+            [new Uint8Array(mediaBuffer.buffer), useCrop, sourceExtension],
+          );
+          stickerBuffer = Buffer.from(result);
+        } else {
+          const result = await workerPool.run<Uint8Array>(
+            processorPath,
+            "createSticker",
+            [new Uint8Array(mediaBuffer.buffer), useCrop],
+          );
+          stickerBuffer = Buffer.from(result);
+        }
+
+        // Add EXIF via worker
+        const sanitizedPackName = this.sanitizePackName(packName);
+        const sanitizedAuthorName = this.sanitizePackName(authorName);
+
+        const exifResult = await workerPool.run<Uint8Array>(
           processorPath,
-          "createAnimatedSticker",
-          [new Uint8Array(mediaBuffer), useCrop, sourceExtension]
+          "addExif",
+          [
+            new Uint8Array(stickerBuffer.buffer),
+            sanitizedPackName,
+            sanitizedAuthorName,
+          ],
         );
-        stickerBuffer = Buffer.from(result);
-      } else {
-        const result = await workerPool.run<Uint8Array>(
-          processorPath,
-          "createSticker",
-          [new Uint8Array(mediaBuffer), useCrop]
-        );
-        stickerBuffer = Buffer.from(result);
+
+        // Send sticker
+        await sock.sendMessage(jid, {
+          sticker: Buffer.from(exifResult),
+        });
+
+        log.info(`Sticker created for user ${user} in ${jid}`);
+      } catch (workerError) {
+        log.error("Error in worker pool processing:", workerError);
+        await sock.sendMessage(jid, {
+          text: `${config.emoji.error} Error saat process sticker (worker error). Coba lagi ya! 😢`,
+        });
       }
-
-      // Add EXIF via worker
-      const exifResult = await workerPool.run<Uint8Array>(
-        processorPath,
-        "addExif",
-        [new Uint8Array(stickerBuffer), packName, authorName]
-      );
-
-      // Send sticker
-      await sock.sendMessage(jid, {
-        sticker: Buffer.from(exifResult),
-      });
-
-      log.info(`Sticker created for user ${user} in ${jid}`);
     } catch (error) {
       log.error("Error in StickerCommand:", error);
       await sock.sendMessage(jid, {
@@ -673,7 +839,7 @@ export class StickerCommand extends CommandInterface {
     const resolvedUrl = this.resolveKnownProviderUrl(url);
 
     try {
-      return await this.fetchMediaFromUrl(resolvedUrl, 0);
+      return await this.fetchMediaFromUrl(resolvedUrl);
     } catch (error) {
       if (isFetchError(error)) {
         const status = error.response?.status;
@@ -697,7 +863,7 @@ export class StickerCommand extends CommandInterface {
       const parsedUrl = new URL(url);
       const hostname = parsedUrl.hostname.toLowerCase();
 
-      if (!hostname.includes("giphy.com")) {
+      if (!hostname.includes(this.PROVIDERS.GIPHY)) {
         return url;
       }
 
@@ -706,7 +872,7 @@ export class StickerCommand extends CommandInterface {
         return url;
       }
 
-      return `https://media.giphy.com/media/${giphyId}/giphy.mp4`;
+      return `https://${this.PROVIDERS.GIPHY_MEDIA}/media/${giphyId}/giphy.mp4`;
     } catch {
       return url;
     }
@@ -727,71 +893,77 @@ export class StickerCommand extends CommandInterface {
   }
 
   private async fetchMediaFromUrl(
-    url: string,
-    depth: number,
+    initialUrl: string,
   ): Promise<{
     buffer: Buffer;
     mediaType: "image" | "video";
     sourceExtension: string;
   }> {
-    if (depth > 2) {
-      throw new Error(
-        "Terlalu banyak redirect/halaman perantara. Kasih link media langsung ya.",
-      );
-    }
+    let currentUrl = initialUrl;
+    let depth = 0;
 
-    const response = await this.fetchClient.get<ArrayBuffer>(url, {
-      responseType: "arraybuffer",
-      timeout: this.URL_FETCH_TIMEOUT,
-      validateStatus: (status) => status >= 200 && status < 400,
-    });
+    // Iterative approach instead of recursive to prevent stack overflow
+    while (depth < this.MAX_REDIRECT_DEPTH) {
+      const response = await this.fetchClient.get<ArrayBuffer>(currentUrl, {
+        responseType: "arraybuffer",
+        timeout: this.URL_FETCH_TIMEOUT,
+        validateStatus: (status) => status >= 200 && status < 400,
+      });
 
-    const contentLengthHeader = response.headers.get("content-length");
-    const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+      const contentLengthHeader = response.headers.get("content-length");
+      const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
 
-    if (contentLength > this.MAX_FILE_SIZE) {
-      throw new Error("File dari URL terlalu besar. Maksimal 16MB ya.");
-    }
+      // Check size upfront to avoid unnecessary memory allocation
+      if (contentLength > 0 && contentLength > this.MAX_FILE_SIZE) {
+        throw new Error("File dari URL terlalu besar. Maksimal 16MB ya.");
+      }
 
-    const buffer = Buffer.from(response.data);
+      const buffer = Buffer.from(response.data);
 
-    if (buffer.length > this.MAX_FILE_SIZE) {
-      throw new Error("File dari URL terlalu besar. Maksimal 16MB ya.");
-    }
+      if (buffer.length > this.MAX_FILE_SIZE) {
+        throw new Error("File dari URL terlalu besar. Maksimal 16MB ya.");
+      }
 
-    const contentType = (response.headers.get("content-type") || "")
-      .split(";")[0]
-      .toLowerCase();
+      const contentType = (response.headers.get("content-type") || "")
+        .split(";")[0]
+        .toLowerCase();
 
-    if (
-      contentType === "text/html" ||
-      contentType === "application/xhtml+xml"
-    ) {
-      const htmlContent = buffer.toString("utf8");
-      const mediaUrl = this.extractMediaUrlFromHtml(htmlContent, url);
+      if (
+        contentType === "text/html" ||
+        contentType === "application/xhtml+xml"
+      ) {
+        const htmlContent = buffer.toString("utf8");
+        const mediaUrl = this.extractMediaUrlFromHtml(htmlContent, currentUrl);
 
-      if (!mediaUrl) {
+        if (!mediaUrl) {
+          throw new Error(
+            "Link ini bukan media langsung. Coba link gambar/video/GIF ya.",
+          );
+        }
+
+        this.validateSourceUrl(mediaUrl);
+        currentUrl = mediaUrl;
+        depth++;
+        continue; // Try next URL
+      }
+
+      const detectedMedia = this.detectMediaType(contentType, currentUrl);
+      if (!detectedMedia) {
         throw new Error(
-          "Link ini bukan media langsung. Coba link gambar/video/GIF ya.",
+          "Format media dari link ini belum didukung buat sticker.",
         );
       }
 
-      this.validateSourceUrl(mediaUrl);
-      return this.fetchMediaFromUrl(mediaUrl, depth + 1);
+      return {
+        buffer,
+        mediaType: detectedMedia.mediaType,
+        sourceExtension: detectedMedia.extension,
+      };
     }
 
-    const detectedMedia = this.detectMediaType(contentType, url);
-    if (!detectedMedia) {
-      throw new Error(
-        "Format media dari link ini belum didukung buat sticker.",
-      );
-    }
-
-    return {
-      buffer,
-      mediaType: detectedMedia.mediaType,
-      sourceExtension: detectedMedia.extension,
-    };
+    throw new Error(
+      "Terlalu banyak redirect/halaman perantara. Kasih link media langsung ya.",
+    );
   }
 
   private extractMediaUrlFromHtml(
