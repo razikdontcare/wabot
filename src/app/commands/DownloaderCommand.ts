@@ -39,7 +39,7 @@ export class DownloaderCommand extends CommandInterface {
   private ytdl = new YtDlpWrapper();
   private readonly SEND_TIMEOUT = 1800000; // 30 minutes timeout (for large file downloads)
   private readonly MAX_MEDIA_SIZE_MB = 100; // Limit for normal media send
-  private readonly MAX_DOCUMENT_SIZE_MB = 1000; // 1GB absolute limit
+  private readonly MAX_DOCUMENT_SIZE_MB = 512; // 512MB absolute limit
   private readonly TIKTOK_USER_AGENT = "curl/8.4.0";
 
   async handleCommand(
