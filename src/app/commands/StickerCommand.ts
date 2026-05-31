@@ -23,6 +23,7 @@ import {
 } from "../../shared/utils/fetchClient.js";
 import webpmux from "node-webpmux";
 import { WorkerPool } from "../../shared/utils/WorkerPool.js";
+import type { Logger } from "pino";
 
 // Type definitions
 interface MediaData {
@@ -125,7 +126,7 @@ export class StickerCommand extends CommandInterface {
           "buffer",
           {},
           {
-            logger: log as any,
+            logger: log as unknown as Logger,
             reuploadRequest: sock.updateMediaMessage,
           },
         );
@@ -146,7 +147,7 @@ export class StickerCommand extends CommandInterface {
           "buffer",
           {},
           {
-            logger: log as any,
+            logger: log as unknown as Logger,
             reuploadRequest: sock.updateMediaMessage,
           },
         );
@@ -180,7 +181,7 @@ export class StickerCommand extends CommandInterface {
             "buffer",
             {},
             {
-              logger: log as any,
+              logger: log as unknown as Logger,
               reuploadRequest: sock.updateMediaMessage,
             },
           );
@@ -201,7 +202,7 @@ export class StickerCommand extends CommandInterface {
             "buffer",
             {},
             {
-              logger: log as any,
+              logger: log as unknown as Logger,
               reuploadRequest: sock.updateMediaMessage,
             },
           );
@@ -232,7 +233,7 @@ export class StickerCommand extends CommandInterface {
   private sanitizePackName(name: string): string {
     return name
       .slice(0, this.PACK_NAME_MAX_LENGTH)
-      .replace(/[^\w\s\-]/g, "")
+      .replace(/[^\w\s-]/g, "")
       .trim();
   }
 
