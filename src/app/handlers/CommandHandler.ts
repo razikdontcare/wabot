@@ -843,12 +843,11 @@ export class CommandHandler {
 `;
 
         statsText =
+          systemStats +
           "Statistik penggunaan perintah:\n" +
           Object.entries(byCommand)
             .map(([cmd, count], i) => `${i + 1}. *${cmd}*: ${count}x`)
-            .join("\n") +
-          "\n\n" +
-          systemStats;
+            .join("\n");
       }
     }
     await sock.sendMessage(jid, { text: statsText });
