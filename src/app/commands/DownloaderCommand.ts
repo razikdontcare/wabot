@@ -14,6 +14,10 @@ import {
   registerPublicDownload,
   removePublicDownload,
 } from "../../shared/utils/publicDownloadStore.js";
+import {
+  DownloadQueueManager,
+  startDownloadQueueCleanup,
+} from "../../shared/utils/downloadQueue.js";
 
 export class DownloaderCommand extends CommandInterface {
   static commandInfo: CommandInfo = {
@@ -37,10 +41,19 @@ export class DownloaderCommand extends CommandInterface {
   };
 
   private ytdl = new YtDlpWrapper();
-  private readonly SEND_TIMEOUT = 300000; // 5 minutes timeout
+  private readonly SEND_TIMEOUT = 1800000; // 30 minutes timeout (for large file downloads)
   private readonly MAX_MEDIA_SIZE_MB = 100; // Limit for normal media send
-  private readonly MAX_DOCUMENT_SIZE_MB = 1000; // 1GB absolute limit
+  private readonly MAX_DOCUMENT_SIZE_MB = 512; // 512MB absolute limit
   private readonly TIKTOK_USER_AGENT = "curl/8.4.0";
+  private queueManager = DownloadQueueManager.getInstance();
+
+  constructor() {
+    super();
+    // Initialize cleanup scheduler on first instantiation
+    if (!this.queueManager) {
+      startDownloadQueueCleanup();
+    }
+  }
 
   async handleCommand(
     args: string[],
@@ -111,6 +124,27 @@ export class DownloaderCommand extends CommandInterface {
       });
       return;
     }
+
+    // Check download queue
+    const queueEntry = this.queueManager.addToQueue({
+      id: `${jid}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      url,
+      jid,
+      user,
+      timestamp: Date.now(),
+      status: "pending",
+    });
+    const downloadId = `${jid}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+    if (!this.queueManager.canStart()) {
+      await sock.sendMessage(jid, {
+        text: `⏳ Download Anda dalam antrian.\n📍 Posisi: ${queueEntry.position + 1}/${queueEntry.queueSize}\n⏸️ Tunggu giliran Anda...`,
+      });
+      return;
+    }
+
+    // Mark download as started
+    this.queueManager.startDownload(downloadId);
 
     try {
       const statusMsg = await sock.sendMessage(jid, {
@@ -327,9 +361,12 @@ export class DownloaderCommand extends CommandInterface {
           edit: progressMessageKey,
         });
       }
+      this.queueManager.completeDownload(downloadId);
       return;
     } catch (error) {
       log.error("Download failed:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.queueManager.failDownload(downloadId, errorMessage);
       await this.handleDownloadError(error, sock, jid);
       return;
     }

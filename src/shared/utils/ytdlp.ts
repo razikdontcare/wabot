@@ -102,7 +102,7 @@ export interface YtDlpStreamResult {
 export class YtDlpWrapper {
   private cookiesFile: string;
   private readonly DOWNLOAD_TIMEOUT = 300000; // 5 minutes timeout
-  private readonly MAX_DURATION = 600; // 10 minutes limit
+  private readonly MAX_DURATION = 3600; // 60 minutes limit (large files served via public CDN)
   private useAria2c: boolean = false; // Enable aria2c by default for speed
 
   constructor(cookiesFile: string = "cookies.txt", useAria2c: boolean = false) {

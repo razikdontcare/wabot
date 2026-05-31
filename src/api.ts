@@ -696,13 +696,11 @@ app.get("/downloads/:token", async (c) => {
       return c.json(
         {
           error: "Download not found or expired",
-          message: "The download link may have expired. Downloads are valid for 24 hours.",
+          message: "The download link may have expired. Downloads are valid for 5 hours.",
         },
         404,
       );
     }
-
-    const fileStream = createReadStream(entry.filePath);
 
     // Set response headers for file download
     c.header("Content-Type", entry.mimeType);
@@ -712,7 +710,34 @@ app.get("/downloads/:token", async (c) => {
     c.header("Pragma", "no-cache");
     c.header("Expires", "0");
 
-    return c.body(fileStream as never);
+    // Use ReadableStream to properly handle file streaming without closing the stream prematurely
+    const readable = createReadStream(entry.filePath);
+
+    return new Promise((resolve) => {
+      const chunks: Buffer[] = [];
+
+      readable.on("data", (chunk) => {
+        if (Buffer.isBuffer(chunk)) {
+          chunks.push(chunk);
+        } else {
+          chunks.push(Buffer.from(chunk));
+        }
+      });
+
+      readable.on("end", () => {
+        resolve(c.body(Buffer.concat(chunks)));
+      });
+
+      readable.on("error", (error) => {
+        readable.destroy();
+        resolve(
+          c.json(
+            { error: "Failed to read file", details: String(error) },
+            500,
+          ),
+        );
+      });
+    });
   } catch (error) {
     return c.json(
       { error: "Failed to serve download", details: String(error) },

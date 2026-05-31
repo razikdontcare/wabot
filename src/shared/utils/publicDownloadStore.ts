@@ -12,7 +12,7 @@ export interface PublicDownloadEntry {
   expiresAt: number;
 }
 
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const DEFAULT_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour cleanup check
 
 const downloadStore = new Map<string, PublicDownloadEntry>();
