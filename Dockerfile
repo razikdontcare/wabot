@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache curl build-base python3 vips-dev bash
@@ -27,7 +27,7 @@ RUN mkdir -p dist/app/commands/prompts && \
     cp src/app/commands/prompts/*.md dist/app/commands/prompts/ || true
 
 # Production stage
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Install runtime dependencies only
 RUN apk add --no-cache vips-dev ffmpeg python3 py3-pip curl ca-certificates aria2
