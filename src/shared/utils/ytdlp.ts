@@ -69,6 +69,8 @@ export interface YtDlpOptions {
   useSystemProxy?: boolean;
   // Custom user agent
   userAgent?: string;
+  // Preset alias (e.g. mp4, mp3)
+  preset?: string;
 }
 
 export interface YtDlpResult {
@@ -356,6 +358,12 @@ export class YtDlpWrapper {
 
     args.push("--no-playlist");
     if (options.noMtime !== false) args.push("--no-mtime");
+
+    if (options.preset) {
+      args.push("-t", options.preset);
+    } else if (!options.audioOnly) {
+      args.push("-t", "mp4");
+    }
 
     if (options.sortBy) {
       args.push("-S", options.sortBy);

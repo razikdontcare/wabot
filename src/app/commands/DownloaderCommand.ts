@@ -28,7 +28,8 @@ export class DownloaderCommand extends CommandInterface {
     helpText: `*Usage:*
 • ${BotConfig.prefix}dl <url> — Download video or audio from YouTube, TikTok, IG, or other supported platforms.
 • reply pesan lain yang berisi URL dengan ${BotConfig.prefix}dl
-• ${BotConfig.prefix}dl --default-ua <url> — Gunakan user-agent default yt-dlp (untuk TikTok jika curl UA gagal)
+• ${BotConfig.prefix}dl -t mp4 <url> — Download menggunakan preset mp4
+• ${BotConfig.prefix}dl --curl-ua <url> — Gunakan user-agent curl (untuk TikTok jika UA default yt-dlp gagal)
 
 *Example:*
 • ${BotConfig.prefix}dl https://vt.tiktok.com/ZSrG9QPK7/
@@ -72,13 +73,37 @@ export class DownloaderCommand extends CommandInterface {
 
     let downloadMode: "audio" | "video" = "video";
     let sendAsDocument = false;
-    let useDefaultUserAgent = false;
+    let useCurlUserAgent = false;
 
     const flags = args.map((a) => a.toLowerCase());
     if (flags.some((a) => ["audio", "a", "-a", "--audio", "mp3"].includes(a)))
       downloadMode = "audio";
     if (flags.some((a) => ["video", "v", "-v", "--video", "mp4"].includes(a)))
       downloadMode = "video";
+
+    let preset: string | undefined = undefined;
+    const tIndex = flags.indexOf("-t");
+    if (tIndex !== -1 && tIndex + 1 < flags.length) {
+      preset = flags[tIndex + 1];
+    } else {
+      const tFlag = flags.find((f) => f.startsWith("-t"));
+      if (tFlag) {
+        if (tFlag.includes("=")) {
+          preset = tFlag.split("=")[1];
+        } else if (tFlag.length > 2) {
+          preset = tFlag.substring(2);
+        }
+      }
+    }
+
+    if (preset) {
+      if (["mp3", "m4a", "audio", "aac"].includes(preset)) {
+        downloadMode = "audio";
+      } else if (["mp4", "mkv", "video"].includes(preset)) {
+        downloadMode = "video";
+      }
+    }
+
     if (
       flags.some((a) =>
         ["document", "doc", "d", "-d", "--doc", "--document"].includes(a),
@@ -88,16 +113,14 @@ export class DownloaderCommand extends CommandInterface {
     if (
       flags.some((a) =>
         [
-          "default-ua",
-          "--default-ua",
-          "native-ua",
-          "--native-ua",
-          "ytdlp-ua",
-          "--ytdlp-ua",
+          "curl-ua",
+          "--curl-ua",
+          "curl",
+          "--curl",
         ].includes(a),
       )
     ) {
-      useDefaultUserAgent = true;
+      useCurlUserAgent = true;
     }
     log.info("Download mode set to:", downloadMode);
 
@@ -156,10 +179,7 @@ export class DownloaderCommand extends CommandInterface {
       const progressUpdateInterval = 3000;
       let isUpdating = false;
 
-      const videoInfo: YtDlpVideoInfo = await this.ytdl.getVideoInfo(url, {
-        proxy: isTikTok ? process.env.PROXY : undefined,
-        userAgent: isTikTok && !useDefaultUserAgent ? this.TIKTOK_USER_AGENT : undefined,
-      });
+      let videoInfo: YtDlpVideoInfo | undefined = undefined;
 
       const handleProgress = async (progress: DownloadProgress) => {
         if (
@@ -225,15 +245,35 @@ export class DownloaderCommand extends CommandInterface {
       }
 
       log.info("Using file-based download to ensure playability");
-      const downloadResult = await this.ytdl.downloadToFile(url, {
-        audioOnly: downloadMode === "audio",
-        useAria2c: false,
-        concurrentFragments: 5,
-        proxy: isTikTok ? process.env.PROXY : undefined,
-        onProgress: handleProgress,
-        videoInfo: videoInfo,
-        userAgent: isTikTok && !useDefaultUserAgent ? this.TIKTOK_USER_AGENT : undefined,
-      });
+      let downloadResult;
+
+      try {
+        videoInfo = await this.ytdl.getVideoInfo(url, {
+          proxy: isTikTok ? process.env.PROXY : undefined,
+          userAgent: isTikTok && useCurlUserAgent ? this.TIKTOK_USER_AGENT : undefined,
+        });
+
+        downloadResult = await this.ytdl.downloadToFile(url, {
+          audioOnly: downloadMode === "audio",
+          useAria2c: false,
+          concurrentFragments: 5,
+          proxy: isTikTok ? process.env.PROXY : undefined,
+          onProgress: handleProgress,
+          videoInfo: videoInfo,
+          userAgent: isTikTok && useCurlUserAgent ? this.TIKTOK_USER_AGENT : undefined,
+          preset: preset || (downloadMode === "video" ? "mp4" : undefined),
+        });
+      } catch (error) {
+        if (isTikTok) {
+          log.warn("yt-dlp failed for TikTok, attempting fallback to TTDL API:", error);
+          downloadResult = await this.downloadFromTtdlFallback(url, downloadMode, progressMessageKey, sock, jid);
+          if (!videoInfo) {
+            videoInfo = downloadResult.metadata;
+          }
+        } else {
+          throw error;
+        }
+      }
 
       const durationText = this.formatDuration(videoInfo?.duration || 0);
       const title = videoInfo?.title || "Unknown";
@@ -478,5 +518,168 @@ export class DownloaderCommand extends CommandInterface {
         text: "❌ Gagal mengunduh media. Periksa URL dan coba lagi.",
       });
     }
+  }
+
+  private async downloadFromTtdlFallback(
+    url: string,
+    downloadMode: "audio" | "video",
+    progressMessageKey: proto.IMessageKey | undefined | null,
+    sock: WebSocketInfo,
+    jid: string,
+  ): Promise<{
+    filePath: string;
+    filename: string;
+    size: number;
+    metadata: YtDlpVideoInfo;
+    cleanup: () => Promise<void>;
+  }> {
+    const ttdlKey = process.env.TTDL_API_KEY;
+    if (!ttdlKey) {
+      throw new Error("TTDL_API_KEY environment variable is not set");
+    }
+
+    if (progressMessageKey) {
+      await sock.sendMessage(jid, {
+        text: "⏳ yt-dlp gagal. Menghubungi server fallback TikTok...",
+        edit: progressMessageKey,
+      });
+    }
+
+    const apiUrl = `https://ttdl.razik.net/api/v1/tiktok?url=${encodeURIComponent(url)}`;
+    const response = await fetch(apiUrl, {
+      headers: {
+        "X-API-Key": ttdlKey,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`TTDL API returned status ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    let mediaUrl = "";
+    let title = "tiktok-video";
+    let duration = 0;
+
+    if (contentType.includes("application/json")) {
+      const json = await response.json() as any;
+      
+      if (json.data) {
+        if (json.data.description) {
+          title = json.data.description;
+        } else if (json.data.title) {
+          title = json.data.title;
+        }
+        
+        if (downloadMode === "audio") {
+          mediaUrl = json.data.media?.music?.playUrl || json.data.media?.music?.playAddr || "";
+          duration = json.data.media?.music?.duration || 0;
+        } else {
+          mediaUrl = json.data.media?.video?.playAddr || json.data.media?.video?.playUrl || "";
+          duration = json.data.media?.video?.duration || 0;
+        }
+      }
+
+      if (!mediaUrl) {
+        const findUrls = (obj: any): string[] => {
+          const urls: string[] = [];
+          if (!obj) return urls;
+          if (typeof obj === "string") {
+            if (obj.startsWith("http://") || obj.startsWith("https://")) {
+              urls.push(obj);
+            }
+          } else if (typeof obj === "object") {
+            for (const key in obj) {
+              if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                urls.push(...findUrls(obj[key]));
+              }
+            }
+          }
+          return urls;
+        };
+
+        const allUrls = findUrls(json);
+        const selected = this.selectBestUrl(allUrls, downloadMode);
+        if (!selected) {
+          throw new Error("No media URL found in fallback API response");
+        }
+        mediaUrl = selected;
+      }
+    } else {
+      mediaUrl = apiUrl;
+    }
+
+    if (progressMessageKey) {
+      await sock.sendMessage(jid, {
+        text: "📥 Mengunduh media dari server fallback...",
+        edit: progressMessageKey,
+      });
+    }
+
+    const mediaResponse = await fetch(mediaUrl);
+    if (!mediaResponse.ok) {
+      throw new Error(`Failed to download media from fallback URL: ${mediaResponse.statusText}`);
+    }
+
+    const arrayBuffer = await mediaResponse.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    const { randomUUID } = await import("crypto");
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+    const { promises: fs } = await import("fs");
+
+    const tempId = randomUUID();
+    const ext = downloadMode === "audio" ? "mp3" : "mp4";
+    const tempDir = tmpdir();
+    const filePath = join(tempDir, `ytdlp_fallback_${tempId}.${ext}`);
+
+    await fs.writeFile(filePath, buffer);
+
+    const cleanup = async () => {
+      await fs.unlink(filePath).catch(() => {});
+    };
+
+    return {
+      filePath,
+      filename: `${this.normalizeFilename(title)}.${ext}`,
+      size: buffer.length,
+      metadata: {
+        id: tempId,
+        title: title,
+        duration: duration,
+      },
+      cleanup,
+    };
+  }
+
+  private selectBestUrl(urls: string[], downloadMode: "audio" | "video"): string | null {
+    if (urls.length === 0) return null;
+    let bestUrl = urls[0];
+    let bestScore = -100;
+
+    for (const url of urls) {
+      let score = 0;
+      if (downloadMode === "audio") {
+        if (url.includes("music") || url.includes("audio") || url.includes(".mp3") || url.includes(".m4a")) {
+          score += 10;
+        }
+      } else {
+        if (url.includes("nowatermark") || url.includes("no_watermark")) {
+          score += 10;
+        }
+        if (url.includes(".mp4")) {
+          score += 5;
+        }
+        if (url.includes("music") || url.includes("audio") || url.includes(".mp3")) {
+          score -= 20;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestUrl = url;
+      }
+    }
+    return bestUrl;
   }
 }
