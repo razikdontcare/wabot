@@ -2,8 +2,8 @@
 
 ## Metadata
 - **map_version**: 1.0.0
-- **last_updated**: 2026-04-28
-- **last_updated_by**: agent/initial-scan
+- **last_updated**: 2026-06-12
+- **last_updated_by**: agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7
 
 ## Project Overview
 WhatsApp bot with AI integration and modular command system. Built with TypeScript/Bun, using Baileys for WhatsApp connectivity and Hono for the API dashboard.
@@ -141,3 +141,6 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-04-28**: Initial map generated from full codebase scan (agent/initial-scan).
 - **2026-04-28**: Added AI agent tools (filesystem, persistent memory) and integrated into AskAICommand.
 - **2026-04-28**: Expanded agent tools with `exec_command` and `web_fetch` for full autonomy.
+- **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Modified yt-dlp module and downloader command to parse and use -t mp4 preset option.
+- **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Reversed TikTok user-agent behavior to default to yt-dlp native/default UA, and added --curl-ua flag for explicit curl UA.
+- **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Added fallback mechanism to TTDL API with X-API-Key header from TTDL_API_KEY env for TikTok downloads.
