@@ -74,6 +74,7 @@ export class UserPreferenceService {
       value === "groq" ||
       value === "google" ||
       value === "openrouter" ||
+      value === "deepseek" ||
       value === "auto"
     ) {
       return value;

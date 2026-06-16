@@ -154,4 +154,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added WhatsApp Formatting Critic, User Profile Memory Graph (MongoDB traits), and Specialized Multi-Agent Delegation (`delegate_task`).
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed WhatsApp formatter regex replacement order for list bullets and images to prevent formatting collision bugs.
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Resolved `any` types in `DownloaderCommand.ts` fallback TikTok API response parser.
+- **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed missing `deepseek` check in `UserPreferenceService.getAIProviderPreference` which caused fallback to openrouter.
 
