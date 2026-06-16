@@ -16,6 +16,7 @@ export interface UserPreference {
   aiPersonalityPreference?: AIPersonality;
   stickerAuthor?: string;
   stickerPack?: string;
+  traits?: Record<string, string>; // User profile traits graph
 }
 
 export class UserPreferenceService {
@@ -35,6 +36,32 @@ export class UserPreferenceService {
 
   async set(user: string, data: Partial<UserPreference>): Promise<void> {
     await this.collection.updateOne({ user }, { $set: data }, { upsert: true });
+  }
+
+  async getProfileGraph(user: string): Promise<Record<string, string>> {
+    const preference = await this.get(user);
+    return preference?.traits || {};
+  }
+
+  async updateProfileTrait(
+    user: string,
+    key: string,
+    value: string,
+  ): Promise<void> {
+    const field = `traits.${key}`;
+    await this.collection.updateOne(
+      { user },
+      { $set: { [field]: value } },
+      { upsert: true },
+    );
+  }
+
+  async deleteProfileTrait(user: string, key: string): Promise<void> {
+    const field = `traits.${key}`;
+    await this.collection.updateOne(
+      { user },
+      { $unset: { [field]: "" } },
+    );
   }
 
   async getAIProviderPreference(
