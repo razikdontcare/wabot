@@ -7,7 +7,7 @@ config(); // Load environment variables from .env file
 
 // Define all possible roles here
 export type UserRole = "admin" | "moderator" | "vip";
-export type AIProviderPreference = "groq" | "google" | "openrouter" | "auto";
+export type AIProviderPreference = "groq" | "google" | "openrouter" | "deepseek" | "auto";
 
 function resolveAIProviderPreference(): AIProviderPreference {
   const raw = (process.env.AI_PROVIDER || "openrouter").toLowerCase();
@@ -16,7 +16,8 @@ function resolveAIProviderPreference(): AIProviderPreference {
     raw === "google" ||
     raw === "auto" ||
     raw === "groq" ||
-    raw === "openrouter"
+    raw === "openrouter" ||
+    raw === "deepseek"
   ) {
     return raw;
   }
@@ -71,6 +72,7 @@ export const BotConfig = {
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
   aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiModelOpenRouter: process.env.AI_MODEL_OPENROUTER || "openrouter/owl-alpha",
+  aiModelDeepSeek: process.env.AI_MODEL_DEEPSEEK || "deepseek-v4-flash",
   aiMultimodalModelGoogle:
     process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiEmbeddingModelGoogle:

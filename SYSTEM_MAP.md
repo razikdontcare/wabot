@@ -2,8 +2,8 @@
 
 ## Metadata
 - **map_version**: 1.0.0
-- **last_updated**: 2026-06-12
-- **last_updated_by**: agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7
+- **last_updated**: 2026-06-16
+- **last_updated_by**: agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe
 
 ## Project Overview
 WhatsApp bot with AI integration and modular command system. Built with TypeScript/Bun, using Baileys for WhatsApp connectivity and Hono for the API dashboard.
@@ -16,7 +16,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
   - `baileys`: WhatsApp Web API
   - `hono`: Web framework for API and dashboard
   - `mongodb`: Persistence (auth, sessions, config, stats)
-  - `ai`, `@ai-sdk/google`, `@ai-sdk/groq`: AI integration
+  - `ai`, `@ai-sdk/google`, `@ai-sdk/groq`, `@ai-sdk/deepseek`: AI integration
   - `sharp`, `jimp`: Image processing
   - `node-cron`: Task scheduling
   - `zod`: Schema validation
@@ -30,8 +30,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `TAVILY_API_KEY` | API key for Tavily search |
 | `API_USERNAME` | Username for Hono API basic auth |
 | `API_PASSWORD` | Password for Hono API basic auth |
-| `AI_PROVIDER` | AI provider routing (google, groq, auto) |
+| `AI_PROVIDER` | AI provider routing (google, groq, openrouter, deepseek, auto) |
 | `DASHBOARD_PORT` | Port for the Hono dashboard (default: 5000) |
+| `DEEPSEEK_API_KEY` | API key for DeepSeek AI (VIP-only provider) |
 
 ## Entry Points
 | Type | File | Description |
@@ -71,7 +72,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/domain/services/IGRSService.ts` | Integration with IGRS (game ratings) | `IGRSService` | #domain | #games |
 | `src/domain/services/ReminderService.ts` | Manages user reminders | `ReminderService` | #domain | #utils |
 | `src/domain/services/SessionService.ts` | Manages user/group game sessions | `SessionService` | #domain | #bot |
-| `src/domain/services/UserPreferenceService.ts` | Manages user-specific preferences | `UserPreferenceService` | #domain | #bot |
+| `src/domain/services/UserPreferenceService.ts` | Manages user-specific preferences and structured memory graph | `UserPreferenceService`, `UserPreference` | #domain | #bot |
 | `src/domain/services/VIPService.ts` | Manages VIP status and benefits | `VIPService` | #domain | #bot |
 
 ### Infrastructure Layer
@@ -93,8 +94,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/api.ts` | API entry point and routes | `broadcastQRUpdate` | #infra | #web |
 | `src/shared/logger/logger.ts` | Custom logging with buffer and redaction | `Logger`, `logBuffer` | #shared | #utils |
 | `src/shared/types/types.ts` | Common TypeScript types | `Session`, `WebSocketInfo` | #shared | #types |
-| `src/shared/utils/ai_tools.ts` | Helper tools for AI interactions | `setCommandHandler` | #shared | #ai |
-| `src/shared/utils/ai_agent_tools.ts` | Filesystem, execution and web tools for AI agents | `list_files`, `read_file`, `write_file`, `delete_file`, `update_memory`, `exec_command`, `web_fetch` (advanced) | #shared | #ai |
+| `src/shared/utils/ai_tools.ts` | Consolidated helper and agent tools for AI interactions (filesystem, command exec, web search, web fetch, knowledge search, web extract) | `setCommandHandler`, `get_bot_commands`, `get_command_help`, `execute_bot_command`, `knowledge_search`, `upsert_knowledge`, `send_chat_message`, `reply_chat_message`, `send_chat_media`, `web_search`, `web_extract`, `list_files`, `read_file`, `write_file`, `delete_file`, `read_memory`, `update_memory`, `exec_command`, `web_fetch` | #shared | #ai |
+| `src/shared/utils/ai_agent_tools.ts` | [DELETED 2026-06-16] Filesystem, execution and web tools for AI agents | N/A | #shared | #ai |
+| `src/shared/utils/whatsapp_formatter.ts` | Formats standard Markdown to WhatsApp-compatible markup | `formatResponseForWhatsApp` | #shared | #utils |
 | `src/shared/utils/ytdlp.ts` | YouTube download utility | `ytdlp` | #shared | #utils |
 
 ## API Surface
@@ -129,6 +131,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **Error Handling**: Standard `try-catch` with custom `Logger`.
 - **Global State**: `globalThis.__botClient` used to share bot instance with API.
 - **Gotcha**: `getMongoClient` uses a promise-based lock to prevent `MongoNotConnectedError` during concurrent initialization.
+- **Convention**: VIP-only providers (e.g. `deepseek`) are gated in `AskAICommand.handleProviderCommand` — the router itself is provider-agnostic.
 
 ## Data Flow: "!help" Command
 1.  **Ingestion**: `BotClient` receives message via `baileys` socket event.
@@ -144,3 +147,11 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Modified yt-dlp module and downloader command to parse and use -t mp4 preset option.
 - **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Reversed TikTok user-agent behavior to default to yt-dlp native/default UA, and added --curl-ua flag for explicit curl UA.
 - **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Added fallback mechanism to TTDL API with X-API-Key header from TTDL_API_KEY env for TikTok downloads.
+- **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added DeepSeek provider (deepseek-v4-flash) as VIP-only option in AI provider routing.
+- **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Merged `ai_agent_tools.ts` into `ai_tools.ts` for improved maintainability.
+- **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added `web_extract` tool utilizing Tavily's Extract API for clean page content extraction.
+- **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Optimized agent execution capability, step counts (30/60), context turns (40), Auto-RAG database search, status cleanup, and research keyword expansion.
+- **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added WhatsApp Formatting Critic, User Profile Memory Graph (MongoDB traits), and Specialized Multi-Agent Delegation (`delegate_task`).
+- **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed WhatsApp formatter regex replacement order for list bullets and images to prevent formatting collision bugs.
+- **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Resolved `any` types in `DownloaderCommand.ts` fallback TikTok API response parser.
+

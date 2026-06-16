@@ -52,6 +52,7 @@
     ]
   },
   "dependencies": {
+    "@ai-sdk/deepseek": "^2.0.38",
     "@ai-sdk/google": "^3.0.59",
     "@ai-sdk/groq": "^3.0.34",
     "@gradio/client": "^1.15.5",

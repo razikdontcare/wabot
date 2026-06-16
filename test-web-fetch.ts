@@ -1,4 +1,4 @@
-import { web_fetch } from "./src/shared/utils/ai_agent_tools.js";
+import { web_fetch } from "./src/shared/utils/ai_tools.js";
 
 async function runTests() {
   console.log("==========================================");

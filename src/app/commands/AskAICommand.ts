@@ -13,8 +13,8 @@ import { getMongoClient } from "../../infrastructure/config/mongo.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
-import { tool as createTool, type ModelMessage } from "ai";
-import { createAskAgent } from "../agents/AskAgent.js";
+import { tool as createTool, type ModelMessage, ToolLoopAgent } from "ai";
+import { createAskAgent, runSubagentTask } from "../agents/AskAgent.js";
 import { z } from "zod";
 import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
 import {
@@ -27,8 +27,7 @@ import {
   send_chat_message,
   upsert_knowledge,
   web_search,
-} from "../../shared/utils/ai_tools.js";
-import {
+  web_extract,
   delete_file,
   exec_command,
   list_files,
@@ -37,7 +36,7 @@ import {
   update_memory,
   web_fetch,
   write_file,
-} from "../../shared/utils/ai_agent_tools.js";
+} from "../../shared/utils/ai_tools.js";
 import {
   AI_PERSONALITIES,
   getKnownUsersForPersonality,
@@ -66,7 +65,7 @@ export class AskAICommand extends CommandInterface {
 • ${BotConfig.prefix}ai status — Lihat status sesi percakapan
 • ${BotConfig.prefix}ai end — Akhiri sesi percakapan
 • ${BotConfig.prefix}ai provider — Lihat preferensi provider AI Anda
-• ${BotConfig.prefix}ai provider <groq|google|openrouter|auto|default> — Atur provider AI Anda
+• ${BotConfig.prefix}ai provider <groq|google|openrouter|deepseek|auto|default> — Atur provider AI Anda
 • ${BotConfig.prefix}ai personality — Lihat personality AI Anda
 • ${BotConfig.prefix}ai personality <nexa|luna|default> — Ganti personality AI
 • ${BotConfig.prefix}ai kb help — Bantuan knowledge base (vector DB)
@@ -79,6 +78,7 @@ export class AskAICommand extends CommandInterface {
 • Jika input berupa gambar, request otomatis dirutekan ke Gemini
 
 👑 *VIP Members:* Unlimited uses tanpa cooldown!
+👑 *VIP Exclusive:* Provider DeepSeek (deepseek-v4-flash)
 
 *Contoh:*
 • ${BotConfig.prefix}ai Siapa kamu?
@@ -230,6 +230,44 @@ export class AskAICommand extends CommandInterface {
       const userPersonalityPreference =
         await this.getUserPersonalityPreference(user);
 
+      // Get user profile traits graph
+      let profileGraphContext = "";
+      try {
+        const preferenceService = await this.getUserPreferenceService();
+        const traits = await preferenceService.getProfileGraph(user);
+        const entries = Object.entries(traits);
+        if (entries.length > 0) {
+          profileGraphContext = entries
+            .map(([key, value]) => `- ${key}: ${value}`)
+            .join("\n");
+          log.info(`Loaded user profile graph with ${entries.length} trait(s).`);
+        }
+      } catch (error) {
+        log.error("Failed to load user profile graph:", error);
+      }
+
+      // Perform Auto-RAG search if knowledge base is configured
+      let autoRagContext = "";
+      if (this.knowledgeVectorService.isConfigured() && prompt.trim()) {
+        try {
+          const results = await this.knowledgeVectorService.searchKnowledge({
+            query: prompt,
+            userId: user,
+            groupId: isGroupChat ? jid : undefined,
+            scope: "auto",
+            limit: 3,
+          });
+          if (results.length > 0) {
+            autoRagContext = results
+              .map((item, index) => `${index + 1}. ${item.text}`)
+              .join("\n");
+            log.info(`Auto-RAG search injected ${results.length} relevant context item(s).`);
+          }
+        } catch (error) {
+          log.error("Failed to perform auto-RAG search:", error);
+        }
+      }
+
       const response = await this.getAICompletion(
         history,
         user,
@@ -241,6 +279,8 @@ export class AskAICommand extends CommandInterface {
         imageInput,
         userProviderPreference,
         userPersonalityPreference,
+        autoRagContext,
+        profileGraphContext,
       );
 
       // Keep the assistant turn in memory only when there is actual text output.
@@ -301,7 +341,10 @@ export class AskAICommand extends CommandInterface {
     imageInput?: AIImageInput | null,
     userProviderPreference?: AIProviderPreference | null,
     userPersonalityPreference?: AIPersonality | null,
+    autoRagContext?: string,
+    profileGraphContext?: string,
   ): Promise<string> {
+    let statusMsgKey: proto.IMessageKey | undefined;
     try {
       const activePersonality = userPersonalityPreference || "nexa";
       const isGroupChat = Boolean(jid?.endsWith("@g.us"));
@@ -349,6 +392,19 @@ export class AskAICommand extends CommandInterface {
         finalSystemPrompt += `\n\nYou are currently chatting with user: ${userPushName}`;
       }
 
+      if (profileGraphContext) {
+        finalSystemPrompt += `\n\n### USER structured PROFILE GRAPH (CORE FACT MEMORY)\n` +
+          `These are structured, verified facts you know about the user:\n` +
+          `${profileGraphContext}\n` +
+          `Refer to this to customize nickname, greeting, preferences, or personal details.`;
+      }
+
+      if (autoRagContext) {
+        finalSystemPrompt += `\n\n### RELEVANT BACKGROUND INFORMATION (AUTO-RAG)\n` +
+          `These are snippets retrieved from the user's/group's past conversations and database, match-relevant to their current query:\n` +
+          `${autoRagContext}`;
+      }
+
       finalSystemPrompt +=
         `\n\nUser-facing output rule: You can only communicate back to the user through \`reply_message()\`, \`send_message()\`, and \`send_media()\`` +
         ` Always deliver the actual response using reply_message() or send_message().` +
@@ -367,9 +423,9 @@ export class AskAICommand extends CommandInterface {
         conversationHistory.findLast((m) => m.role === "user")?.content || "";
       const isResearchIntent = this.detectResearchIntent(lastUserMessage);
 
-      let stopWhenSteps = 15;
+      let stopWhenSteps = 30;
       if (isResearchIntent) {
-        stopWhenSteps = 25;
+        stopWhenSteps = 60;
         finalSystemPrompt += `\n\n### DEEP RESEARCH PROTOCOL ACTIVATED
 You have identified a research-heavy request. Follow these steps for maximum accuracy:
 1. **Multi-Source Verification**: Do not rely on a single search result. Compare information from at least 3 different sources.
@@ -377,17 +433,17 @@ You have identified a research-heavy request. Follow these steps for maximum acc
 3. **Fact Checking**: Check for contradictory information. If found, present both sides.
 4. **Structured Report**: Synthesize your findings into a comprehensive, well-structured report. Use bolding and lists for readability.
 5. **Citations**: Always include the source URLs you used at the end of your report.
-6. **Efficiency**: You have an increased step limit (25 steps) to complete this investigation.`;
+6. **Efficiency**: You have an increased step limit (60 steps) to complete this investigation.`;
 
-        log.info("Deep Research Mode activated for this request (25 steps)");
+        log.info("Deep Research Mode activated for this request (60 steps)");
       }
       // ---------------------------------
 
       // Build conversation messages for AI SDK.
       const messages: ModelMessage[] = [];
 
-      // Limit to last 20 messages to prevent context window overflow
-      const MAX_CONTEXT_TURNS = 20;
+      // Limit to last 40 messages to prevent context window overflow
+      const MAX_CONTEXT_TURNS = 40;
       const recentHistory = conversationHistory.slice(-MAX_CONTEXT_TURNS);
 
       const latestUserMessageIndex = imageInput
@@ -440,7 +496,45 @@ You have identified a research-heavy request. Follow these steps for maximum acc
 
       let responseToolUsed = false;
 
-      const aiTools = {
+      let aiTools: ConstructorParameters<typeof ToolLoopAgent>[0]["tools"];
+      aiTools = {
+        update_profile_trait: createTool({
+          description: "Update a structured trait/fact in the user's profile graph memory (e.g. name, preferences, favorite things). Set value to empty/remove/delete to delete.",
+          inputSchema: z.object({
+            key: z.string().min(1).describe("The profile fact key, e.g. 'petName' or 'preferredProgrammingLanguage'"),
+            value: z.string().describe("The profile fact value to save, or empty string to delete"),
+          }),
+          execute: async ({ key, value }) => {
+            try {
+              const preferenceService = await this.getUserPreferenceService();
+              if (!value || value.trim() === "" || value.trim() === "delete" || value.trim() === "remove") {
+                await preferenceService.deleteProfileTrait(user, key);
+                return `Successfully deleted trait '${key}' for user.`;
+              }
+              await preferenceService.updateProfileTrait(user, key, value);
+              return `Successfully updated trait '${key}' to '${value}' in user's profile graph memory.`;
+            } catch (err) {
+              log.error("Failed to update profile trait:", err);
+              return `Error updating profile trait: ${err instanceof Error ? err.message : String(err)}`;
+            }
+          },
+        }),
+        delegate_task: createTool({
+          description: "Delegate a complex sub-task to a specialized subagent (researcher, coder, writer) to offload work.",
+          inputSchema: z.object({
+            agentType: z.enum(["researcher", "coder", "writer"]),
+            task: z.string().min(1).describe("Specific detailed task description for the subagent to execute"),
+          }),
+          execute: async ({ agentType, task }) => {
+            try {
+              log.info(`Executing delegated task to subagent '${agentType}': ${task}`);
+              return await runSubagentTask(route, agentType, task, aiTools);
+            } catch (err) {
+              log.error(`Error in subagent delegation:`, err);
+              return `Error executing delegated task: ${err instanceof Error ? err.message : String(err)}`;
+            }
+          },
+        }),
         knowledge_search: createTool({
           description:
             "Search internal knowledge base (Qdrant) for relevant context from stored conversations/documents.",
@@ -471,7 +565,15 @@ You have identified a research-heavy request. Follow these steps for maximum acc
               .optional(),
           }),
           execute: async ({ query, topic, searchDepth, includeAnswer }) =>
-            web_search(query, topic, { searchDepth, includeAnswer }),
+              web_search(query, topic, { searchDepth, includeAnswer }),
+        }),
+        web_extract: createTool({
+          description: "Extract clean content from one or more URLs using Tavily Extract API",
+          inputSchema: z.object({
+            urls: z.union([z.string(), z.array(z.string())]),
+            query: z.string().optional().describe("Optional query to search/filter the page content for relevance"),
+          }),
+          execute: async ({ urls, query }) => web_extract(urls, query),
         }),
         send_message: createTool({
           description:
@@ -635,12 +737,15 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         finalSystemPrompt,
         aiTools,
         stopWhenSteps,
+        isResearchIntent,
       );
 
-      let statusMsgKey: proto.IMessageKey | undefined;
       const toolEmojis: Record<string, string> = {
+        update_profile_trait: "👤",
+        delegate_task: "👥",
         knowledge_search: "🔍",
         web_search: "🌐",
+        web_extract: "📥",
         send_message: "📤",
         reply_message: "💬",
         send_media: "🖼️",
@@ -717,9 +822,27 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         }
       }
 
+      // Clean up the status/loading message
+      if (statusMsgKey && jid && sock) {
+        try {
+          await sock.sendMessage(jid, { delete: statusMsgKey });
+        } catch (err) {
+          log.warn("Failed to delete AI status/loading message:", err);
+        }
+      }
+
       return result.text || "Tidak ada jawaban yang diberikan oleh AI.";
     } catch (error) {
       console.error("Error fetching AI completion:", error);
+
+      // Clean up the status/loading message on error
+      if (statusMsgKey && jid && sock) {
+        try {
+          await sock.sendMessage(jid, { delete: statusMsgKey });
+        } catch (err) {
+          log.warn("Failed to delete AI status/loading message on error:", err);
+        }
+      }
 
       try {
         const userFacing =
@@ -920,7 +1043,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           `• Default bot: ${BotConfig.aiProvider}\n` +
           `• Rute teks aktif: ${textRouteText}\n` +
           `• Rute gambar aktif: ${imageRouteText}\n\n` +
-          `Gunakan ${BotConfig.prefix}ai provider <groq|google|openrouter|auto|default> untuk mengubah preferensi.`,
+          `Gunakan ${BotConfig.prefix}ai provider <groq|google|openrouter|deepseek|auto|default> untuk mengubah preferensi.`,
       });
       return;
     }
@@ -947,14 +1070,29 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         requested !== "groq" &&
         requested !== "google" &&
         requested !== "openrouter" &&
+        requested !== "deepseek" &&
         requested !== "auto"
       ) {
         await sock.sendMessage(jid, {
           text:
             `❌ Provider tidak valid: ${requested}\n` +
-            `Gunakan: ${BotConfig.prefix}ai provider <groq|google|openrouter|auto|default>`,
+            `Gunakan: ${BotConfig.prefix}ai provider <groq|google|openrouter|deepseek|auto|default>`,
         });
         return;
+      }
+
+      // DeepSeek is VIP-only
+      if (requested === "deepseek") {
+        const userRoles = await getUserRoles(user);
+        const isVip = userRoles.includes("vip") || userRoles.includes("admin");
+        if (!isVip) {
+          await sock.sendMessage(jid, {
+            text:
+              `👑 Provider *deepseek* (deepseek-v4-flash) hanya tersedia untuk member VIP.\n\n` +
+              `Gunakan provider lain atau hubungi admin untuk mendapatkan akses VIP.`,
+          });
+          return;
+        }
       }
 
       await preferenceService.setAIProviderPreference(
@@ -1836,6 +1974,9 @@ You have identified a research-heavy request. Follow these steps for maximum acc
       "asal usul",
       "latar belakang",
       "studi kasus",
+      "ekstrak",
+      "sintesis",
+      "rangkuman mendalam",
 
       // English
       "deep dive",
@@ -1851,6 +1992,9 @@ You have identified a research-heavy request. Follow these steps for maximum acc
       "background",
       "origin",
       "history of",
+      "extract",
+      "scrap",
+      "scrape",
     ];
 
     const hasKeyword = researchKeywords.some((keyword) =>
@@ -1867,6 +2011,10 @@ You have identified a research-heavy request. Follow these steps for maximum acc
       /^explain the difference between/i,
       /^how does .* work/i,
       /^what is the history of/i,
+      /^ekstrak konten/i,
+      /^extract content/i,
+      /^scrape/i,
+      /^web scraping/i,
     ];
 
     const hasPattern = structuralPatterns.some((pattern) =>

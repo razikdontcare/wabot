@@ -562,7 +562,25 @@ export class DownloaderCommand extends CommandInterface {
     let duration = 0;
 
     if (contentType.includes("application/json")) {
-      const json = await response.json() as any;
+      interface TTDLResponse {
+        data?: {
+          description?: string;
+          title?: string;
+          media?: {
+            music?: {
+              playUrl?: string;
+              playAddr?: string;
+              duration?: number;
+            };
+            video?: {
+              playUrl?: string;
+              playAddr?: string;
+              duration?: number;
+            };
+          };
+        };
+      }
+      const json = await response.json() as TTDLResponse;
       
       if (json.data) {
         if (json.data.description) {
@@ -581,17 +599,18 @@ export class DownloaderCommand extends CommandInterface {
       }
 
       if (!mediaUrl) {
-        const findUrls = (obj: any): string[] => {
+        const findUrls = (obj: unknown): string[] => {
           const urls: string[] = [];
           if (!obj) return urls;
           if (typeof obj === "string") {
             if (obj.startsWith("http://") || obj.startsWith("https://")) {
               urls.push(obj);
             }
-          } else if (typeof obj === "object") {
-            for (const key in obj) {
-              if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                urls.push(...findUrls(obj[key]));
+          } else if (typeof obj === "object" && obj !== null) {
+            const record = obj as Record<string, unknown>;
+            for (const key in record) {
+              if (Object.prototype.hasOwnProperty.call(record, key)) {
+                urls.push(...findUrls(record[key]));
               }
             }
           }
