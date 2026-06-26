@@ -44,10 +44,13 @@ export const useMongoDBAuthState = async (
     //     );
     //   }
     // }
-    const db = client.db(dbName);
-    const collections = {
-        creds: db.collection<AuthDocument>(`${collectionPrefix}creds`),
-        keys: db.collection<AuthDocument>(`${collectionPrefix}keys`),
+    const getCollections = async () => {
+        const activeClient = await getMongoClient();
+        const db = activeClient.db(dbName);
+        return {
+            creds: db.collection<AuthDocument>(`${collectionPrefix}creds`),
+            keys: db.collection<AuthDocument>(`${collectionPrefix}keys`),
+        };
     };
 
     // Helper function to safely serialize data
@@ -98,6 +101,7 @@ export const useMongoDBAuthState = async (
     // Initialize credentials with retry mechanism
     let creds: AuthenticationCreds;
     try {
+        const collections = await getCollections();
         const credsDoc = await retryOperation(() => collections.creds.findOne({_id: 'creds'}), 3, 800);
 
         creds = credsDoc?.data ? deserializeData<AuthenticationCreds>(credsDoc.data) || initAuthCreds() : initAuthCreds();
@@ -120,6 +124,7 @@ export const useMongoDBAuthState = async (
                     if (!ids.length) return data;
 
                     try {
+                        const collections = await getCollections();
                         const docs = await retryOperation(
                             () =>
                                 collections.keys
@@ -165,6 +170,8 @@ export const useMongoDBAuthState = async (
                     if (!data || Object.keys(data).length === 0) {
                         return; // Skip if no data to set
                     }
+
+                    const collections = await getCollections();
 
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const bulkOps: any[] = [];
@@ -219,6 +226,7 @@ export const useMongoDBAuthState = async (
         },
         saveCreds: async () => {
             try {
+                const collections = await getCollections();
                 await retryOperation(
                     () =>
                         collections.creds.updateOne({_id: 'creds'}, {$set: {data: serializeData(creds)}}, {upsert: true}),
@@ -233,6 +241,7 @@ export const useMongoDBAuthState = async (
         },
         removeCreds: async () => {
             try {
+                const collections = await getCollections();
                 await Promise.all([
                     retryOperation(() => collections.creds.deleteMany({}), 3, 800),
                     retryOperation(() => collections.keys.deleteMany({}), 3, 800),

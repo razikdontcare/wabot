@@ -7,6 +7,7 @@ import {
   fetchLatestBaileysVersion,
   isJidBroadcast,
   makeWASocket,
+  proto,
 } from "baileys";
 import { CommandHandler } from "../handlers/CommandHandler.js";
 import { SessionService } from "../../domain/services/SessionService.js";
@@ -105,6 +106,21 @@ export class BotClient {
         // Use shared MongoClient for usage stats and auth
         this.mongoClient = await getMongoClient();
         this.usageService = new CommandUsageService(this.mongoClient);
+
+        // Ensure TTL index on messages collection (expire after 7 days)
+        const dbName = process.env.NODE_ENV !== "production"
+          ? `${BotConfig.sessionName}_dev`
+          : BotConfig.sessionName;
+        const db = this.mongoClient.db(dbName);
+        await db.collection("messages").createIndex(
+          { createdAt: 1 },
+          { expireAfterSeconds: 7 * 24 * 60 * 60 } // 7 days
+        ).catch(err => log.error("Failed to create messages TTL index:", err));
+        await db.collection("messages").createIndex(
+          { remoteJid: 1, id: 1 },
+          { unique: true }
+        ).catch(err => log.error("Failed to create messages unique index:", err));
+
         this.authState = await useMongoDBAuthState(
           // process.env.MONGO_URI!,
           process.env.NODE_ENV !== "production"
@@ -135,15 +151,24 @@ export class BotClient {
             // We'll just keep the original message unchanged
             return message;
           },
-          // getMessage: async (key) => {
-          //   if (this.store) {
-          //     const msg = await this.store.loadMessage(key.remoteJid!, key.id!);
-          //     return msg?.message || undefined;
-          //   }
-
-          //   // Only if store is present
-          //   return proto.Message.fromObject({});
-          // },
+          getMessage: async (key) => {
+            if (this.mongoClient && key.remoteJid && key.id) {
+              try {
+                const dbName = process.env.NODE_ENV !== "production"
+                  ? `${BotConfig.sessionName}_dev`
+                  : BotConfig.sessionName;
+                const db = this.mongoClient.db(dbName);
+                const doc = await db.collection("messages").findOne({
+                  remoteJid: key.remoteJid,
+                  id: key.id
+                });
+                return (doc?.message as proto.IMessage) || undefined;
+              } catch (error) {
+                log.error("Failed to get message from database:", error);
+              }
+            }
+            return undefined;
+          },
           cachedGroupMetadata: async (jid) => this.groupCache.get(jid),
         });
 
@@ -182,7 +207,11 @@ export class BotClient {
         if (connection === "close") {
           const statusCode = (lastDisconnect?.error as Boom)?.output
             ?.statusCode;
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          // We should only permanently disconnect/logout if explicitly logged out or session is bad
+          const isPermanentLogout = 
+            statusCode === DisconnectReason.loggedOut || 
+            statusCode === DisconnectReason.badSession;
+          const shouldReconnect = !isPermanentLogout;
 
           log.warn(
             "Connection closed due to ",
@@ -211,10 +240,12 @@ export class BotClient {
 
               setTimeout(() => this.start(), delay);
             } else {
-              log.error(
-                `Exceeded maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}). Logging out and resetting state.`,
+              const fallbackDelay = 60000;
+              log.warn(
+                `Exceeded maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}). Keeping credentials and retrying in ${Math.round(fallbackDelay / 1000)}s indefinitely...`,
               );
-              this.resetAndLogout();
+              this.cleanupSocket();
+              setTimeout(() => this.start(), fallbackDelay);
             }
           } else {
             this.resetAndLogout();
@@ -259,17 +290,18 @@ export class BotClient {
 
       this.sock.ev.on("messages.upsert", async ({ messages, type }) => {
         try {
+          // Store all messages to MongoDB message store
+          for (const m of messages) {
+            if (m.message) {
+              await this.saveMessageToDb(m);
+            }
+          }
+
           if (type != "notify") return;
           for (const m of messages) {
             if (!m.message) continue;
 
-            const baseText =
-              m.message.conversation ||
-              m.message.extendedTextMessage?.text ||
-              m.message.imageMessage?.caption ||
-              m.message.videoMessage?.caption ||
-              m.message.documentMessage?.caption ||
-              "";
+            const baseText = this.extractTextFromMessage(m.message);
             const baseJid = m.key.remoteJid!;
             const baseUser = m.key.participant || baseJid;
 
@@ -410,24 +442,54 @@ export class BotClient {
       });
     } catch (error) {
       log.error("Error in start method:", error);
-      // Try to restart after a delay if not already at max attempts
-      if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-        this.reconnectAttempts++;
-        const delay = Math.min(
-          RECONNECT_INTERVAL * Math.pow(1.5, this.reconnectAttempts - 1),
-          60000,
-        );
-        log.info(
-          `Restarting after error (attempt ${
-            this.reconnectAttempts
-          }/${MAX_RECONNECT_ATTEMPTS}) in ${Math.round(delay / 1000)}s...`,
-        );
-        setTimeout(() => this.start(), delay);
-      } else {
-        log.error("Too many restart attempts, giving up.");
-        await closeMongoClient();
-      }
+      this.reconnectAttempts++;
+      const delay = this.reconnectAttempts <= MAX_RECONNECT_ATTEMPTS
+        ? Math.min(
+            RECONNECT_INTERVAL * Math.pow(1.5, this.reconnectAttempts - 1),
+            60000,
+          )
+        : 60000;
+      
+      log.info(
+        `Restarting after error (attempt ${
+          this.reconnectAttempts
+        }${this.reconnectAttempts <= MAX_RECONNECT_ATTEMPTS ? "/" + MAX_RECONNECT_ATTEMPTS : ""}) in ${Math.round(delay / 1000)}s...`,
+      );
+      setTimeout(() => this.start(), delay);
     }
+  }
+
+  private extractTextFromMessage(message: proto.IMessage | null | undefined): string {
+    if (!message) return "";
+
+    // Unwrap wrapper messages recursively
+    if (message.viewOnceMessage?.message) {
+      return this.extractTextFromMessage(message.viewOnceMessage.message);
+    }
+    if (message.viewOnceMessageV2?.message) {
+      return this.extractTextFromMessage(message.viewOnceMessageV2.message);
+    }
+    if (message.viewOnceMessageV2Extension?.message) {
+      return this.extractTextFromMessage(message.viewOnceMessageV2Extension.message);
+    }
+    if (message.ephemeralMessage?.message) {
+      return this.extractTextFromMessage(message.ephemeralMessage.message);
+    }
+    if (message.documentWithCaptionMessage?.message) {
+      return this.extractTextFromMessage(message.documentWithCaptionMessage.message);
+    }
+
+    return (
+      message.conversation ||
+      message.extendedTextMessage?.text ||
+      message.imageMessage?.caption ||
+      message.videoMessage?.caption ||
+      message.documentMessage?.caption ||
+      message.buttonsResponseMessage?.selectedButtonId ||
+      message.listResponseMessage?.singleSelectReply?.selectedRowId ||
+      message.templateButtonReplyMessage?.selectedId ||
+      ""
+    );
   }
 
   private extractCommandFromMention(
@@ -500,12 +562,36 @@ export class BotClient {
       // Optional: exit the process or restart with fresh state
       // process.exit(0);
 
-      // Alternatively, restart with fresh state after a delay
       setTimeout(() => this.start(), 5000);
     } catch (error) {
       log.error("Error during logout:", error);
       await closeMongoClient();
       process.exit(1); // Force exit on critical error
+    }
+  }
+
+  private async saveMessageToDb(m: proto.IWebMessageInfo) {
+    if (!this.mongoClient || !m.message || !m.key || !m.key.remoteJid || !m.key.id) return;
+    try {
+      const dbName = process.env.NODE_ENV !== "production"
+        ? `${BotConfig.sessionName}_dev`
+        : BotConfig.sessionName;
+      const db = this.mongoClient.db(dbName);
+
+      await db.collection("messages").updateOne(
+        { remoteJid: m.key.remoteJid, id: m.key.id },
+        {
+          $set: {
+            message: m.message,
+            participant: m.key.participant || m.key.remoteJid,
+            timestamp: m.messageTimestamp,
+            createdAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+    } catch (error) {
+      log.error("Failed to save message to database:", error);
     }
   }
 }
