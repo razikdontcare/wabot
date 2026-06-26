@@ -37,7 +37,7 @@ export async function getMongoClient(): Promise<MongoClient> {
                     lastPingCheck = Date.now();
                 } catch (_error) {
                     // Connection lost, reconnect
-                    await client.close().catch(() => {});
+                    await client.close(true).catch(() => {});
                     client = new MongoClient(uri);
                     await client.connect();
                     lastPingCheck = Date.now();
@@ -54,7 +54,7 @@ export async function getMongoClient(): Promise<MongoClient> {
 
 export async function closeMongoClient(): Promise<void> {
     if (client) {
-        await client.close();
+        await client.close(true).catch(() => {});
         client = null;
     }
 }
