@@ -13,7 +13,7 @@ import { getMongoClient } from "../../infrastructure/config/mongo.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
-import { tool as createTool, type ModelMessage, ToolLoopAgent } from "ai";
+import { generateText, tool as createTool, type ModelMessage, ToolLoopAgent } from "ai";
 import { createAskAgent, runSubagentTask } from "../agents/AskAgent.js";
 import { z } from "zod";
 import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
@@ -375,20 +375,71 @@ export class AskAICommand extends CommandInterface {
           .join("\n\n"),
       });
 
+      const lastUserMessage =
+        conversationHistory.findLast((m) => m.role === "user")?.content || "";
+
+      const mainProvider = userProviderPreference || BotConfig.aiProvider;
+      const mainModelSupportsVision = mainProvider === "google";
+
+      let imageDescription = "";
+      if (imageInput && !mainModelSupportsVision) {
+        try {
+          log.info("Auxiliary vision model activated to analyze image...");
+          const auxiliaryRoute = this.providerRouter.getRoutedModel({
+            requiresMultimodal: true,
+          });
+
+          const base64Content = imageInput.dataUrl.split(";base64,").pop() || "";
+          const imageBuffer = Buffer.from(base64Content, "base64");
+          
+          const userPrompt = lastUserMessage || "Describe this image in detail.";
+          
+          const response = await generateText({
+            model: auxiliaryRoute.model,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: `Analyze this image in the context of the user prompt: "${userPrompt}". Describe what you see factually, focusing on objects, text, people, colors, and layout.`,
+                  },
+                  {
+                    type: "image",
+                    image: imageBuffer,
+                    mediaType: imageInput.mimeType,
+                  },
+                ],
+              },
+            ],
+          });
+
+          imageDescription = response.text;
+          log.info("Auxiliary vision model analysis completed.");
+        } catch (visionError) {
+          log.error(
+            "Auxiliary vision model analysis failed:",
+            visionError instanceof Error ? visionError.message : String(visionError),
+          );
+          imageDescription = "Failed to analyze image due to auxiliary vision model error.";
+        }
+      }
+
       const route = this.providerRouter.getRoutedModel({
-        requiresMultimodal: Boolean(imageInput),
+        requiresMultimodal: mainModelSupportsVision,
         preferredProvider: userProviderPreference || undefined,
       });
-
-      if (imageInput && userProviderPreference === "groq") {
-        log.info(
-          "AI provider preference is groq, but image input detected. Routing to google for multimodal support.",
-        );
-      }
 
       let finalSystemPrompt = base_prompt;
       if (userPushName) {
         finalSystemPrompt += `\n\nYou are currently chatting with user: ${userPushName}`;
+      }
+
+      if (imageDescription) {
+        finalSystemPrompt += `\n\n### IMAGE ANALYSIS (FROM AUXILIARY VISION MODEL)\n` +
+          `The user attached an image to their request. Since your current model is text-only, here is the analysis/description of the image from our auxiliary vision model:\n` +
+          `${imageDescription}\n` +
+          `Use this analysis to answer the user's questions about the image.`;
       }
 
       if (profileGraphContext) {
@@ -418,8 +469,6 @@ export class AskAICommand extends CommandInterface {
 5. **Knowledge Upsert**: For factual information that might be useful later, the system automatically saves chat turns, but you can use \`write_file()\` to specific knowledge files if requested.`;
 
       // --- Deep Research Enhancement ---
-      const lastUserMessage =
-        conversationHistory.findLast((m) => m.role === "user")?.content || "";
       const isResearchIntent = this.detectResearchIntent(lastUserMessage);
 
       let stopWhenSteps = 30;
