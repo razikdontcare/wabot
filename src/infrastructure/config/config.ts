@@ -65,6 +65,7 @@ export const BotConfig = {
   groqApiKey: process.env.GROQ_API_KEY || "", // Kunci API untuk Groq AI
   googleGenerativeAiApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || "", // Kunci API untuk Google Generative AI
   tavilyApiKey: process.env.TAVILY_API_KEY || "", // Kunci API untuk Tavily AI
+  exaApiKey: process.env.EXA_API_KEY || "", // Kunci API untuk Exa AI
 
   // Pengaturan AI Provider Routing
   aiProvider: resolveAIProviderPreference(), // groq | google | openrouter | auto

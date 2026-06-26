@@ -2,7 +2,7 @@
 
 ## Metadata
 - **map_version**: 1.0.0
-- **last_updated**: 2026-06-16
+- **last_updated**: 2026-06-27
 - **last_updated_by**: agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe
 
 ## Project Overview
@@ -28,6 +28,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `GROQ_API_KEY` | API key for Groq AI |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | API key for Google Generative AI |
 | `TAVILY_API_KEY` | API key for Tavily search |
+| `EXA_API_KEY` | API key for Exa search and extract (primary) |
 | `API_USERNAME` | Username for Hono API basic auth |
 | `API_PASSWORD` | Password for Hono API basic auth |
 | `AI_PROVIDER` | AI provider routing (google, groq, openrouter, deepseek, auto) |
@@ -155,4 +156,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed WhatsApp formatter regex replacement order for list bullets and images to prevent formatting collision bugs.
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Resolved `any` types in `DownloaderCommand.ts` fallback TikTok API response parser.
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed missing `deepseek` check in `UserPreferenceService.getAIProviderPreference` which caused fallback to openrouter.
+- **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Integrated Exa search and extract tools utilizing the exa-js SDK, with fallback mechanisms to Tavily API.
 

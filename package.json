@@ -65,6 +65,7 @@
     "chalk": "^5.4.1",
     "chrono-node": "^2.9.0",
     "dotenv": "^16.5.0",
+    "exa-js": "^2.15.0",
     "hono": "^4.7.7",
     "iconv-lite": "^0.7.2",
     "ipaddr.js": "^2.3.0",
