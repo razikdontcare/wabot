@@ -78,7 +78,6 @@ export class AskAICommand extends CommandInterface {
 • Jika input berupa gambar, request otomatis dirutekan ke Gemini
 
 👑 *VIP Members:* Unlimited uses tanpa cooldown!
-👑 *VIP Exclusive:* Provider DeepSeek (deepseek-v4-flash)
 
 *Contoh:*
 • ${BotConfig.prefix}ai Siapa kamu?
@@ -1081,19 +1080,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         return;
       }
 
-      // DeepSeek is VIP-only
-      if (requested === "deepseek") {
-        const userRoles = await getUserRoles(user);
-        const isVip = userRoles.includes("vip") || userRoles.includes("admin");
-        if (!isVip) {
-          await sock.sendMessage(jid, {
-            text:
-              `👑 Provider *deepseek* (deepseek-v4-flash) hanya tersedia untuk member VIP.\n\n` +
-              `Gunakan provider lain atau hubungi admin untuk mendapatkan akses VIP.`,
-          });
-          return;
-        }
-      }
+
 
       await preferenceService.setAIProviderPreference(
         user,
