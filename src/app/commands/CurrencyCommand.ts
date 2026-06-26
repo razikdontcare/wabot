@@ -4,7 +4,7 @@ import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { createFetchClient } from "../../shared/utils/fetchClient.js";
 
-const MBG_IDR_RATE = 917800000000; // Rp 917,8 Miliar
+const MBG_IDR_RATE = 373600000000; // Rp 373,6 Miliar
 
 export class CurrencyCommand extends CommandInterface {
   private client = createFetchClient();
