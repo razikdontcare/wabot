@@ -15,6 +15,7 @@ import { parse } from "node-html-parser";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import iconv from "iconv-lite";
 import { tavily } from "@tavily/core";
+import { Exa } from "exa-js";
 import { BotConfig, log } from "../../infrastructure/config/config.js";
 import { formatResponseForWhatsApp } from "./whatsapp_formatter.js";
 import { CommandHandler } from "../../app/handlers/CommandHandler.js";
@@ -1057,6 +1058,47 @@ export async function web_search(
     log.info(`Performing web search for query: ${query}`);
     if (!query) return "Tidak ada query yang diberikan untuk pencarian web.";
 
+    // Try Exa first if API key is configured
+    if (BotConfig.exaApiKey) {
+      try {
+        log.info("Using Exa API for search...");
+        const exa = new Exa(BotConfig.exaApiKey);
+        
+        // Map search depth to Exa search type
+        const type = options?.searchDepth === "fast" || options?.searchDepth === "ultra-fast" ? "fast" : "auto";
+        
+        const response = await exa.search(query, {
+          type,
+          numResults: 5,
+          contents: {
+            text: true,
+            highlights: true,
+          },
+        });
+
+        if (response.results && response.results.length > 0) {
+          const sources = response.results
+            .map((result: { title?: string | null; url: string; score?: number; text?: string; highlights?: string[] }) => {
+              const snippet = result.highlights && result.highlights.length > 0
+                ? result.highlights.join("\n... ")
+                : (result.text ? result.text.substring(0, 300) + "..." : "");
+              
+              return `[${result.title || "Untitled"}](${result.url}) (Score: ${result.score?.toFixed(4) ?? "N/A"})\n${snippet}`;
+            })
+            .join("\n\n");
+            
+          return `Hasil Pencarian Exa:\n\n${sources}`;
+        }
+      } catch (exaError) {
+        log.warn(
+          "Exa search failed, falling back to Tavily:",
+          exaError instanceof Error ? exaError.message : String(exaError),
+        );
+      }
+    }
+
+    // Tavily Fallback
+    log.info("Using Tavily API for search...");
     const searchDepth = options?.searchDepth ?? "advanced";
     const includeAnswer = options?.includeAnswer ?? true;
 
@@ -1068,11 +1110,11 @@ export async function web_search(
 
     if (response.answer && response.results && response.results.length > 0) {
       const sources = response.results
-          .map(
-            (result) =>
-              `[${result.title}](${result.url}) (Score: ${result.score})\n${result.content}`,
-          )
-          .join("\n\n");
+        .map(
+          (result) =>
+            `[${result.title}](${result.url}) (Score: ${result.score})\n${result.content}`,
+        )
+        .join("\n\n");
       return `${response.answer}\n\nSumber:\n${sources}`;
     } else if (response.results && response.results.length > 0) {
       return response.results.map((result) => result.title).join("\n");
@@ -1102,11 +1144,41 @@ export async function web_extract(
 ): Promise<string> {
   try {
     const urlsArray = Array.isArray(urls) ? urls : [urls];
-    log.info(`Performing Tavily Extract for urls: ${urlsArray.join(", ")}`);
     if (urlsArray.length === 0) {
       return "Tidak ada URL yang diberikan untuk diekstrak.";
     }
 
+    // Try Exa first if API key is configured
+    if (BotConfig.exaApiKey) {
+      try {
+        log.info(`Performing Exa getContents for urls: ${urlsArray.join(", ")}`);
+        const exa = new Exa(BotConfig.exaApiKey);
+
+        const response = await exa.getContents(urlsArray, {
+          text: true,
+          highlights: query ? { query } : true,
+        });
+
+        if (response.results && response.results.length > 0) {
+          return response.results
+            .map((result: { title?: string | null; url: string; text?: string; highlights?: string[] }) => {
+              const snippet = result.highlights && result.highlights.length > 0
+                ? `Highlights:\n${result.highlights.join("\n... ")}\n\n`
+                : "";
+              return `URL: ${result.url}\nTitle: ${result.title || "No Title"}\n${snippet}Content:\n${result.text}`;
+            })
+            .join("\n\n---\n\n");
+        }
+      } catch (exaError) {
+        log.warn(
+          "Exa extract failed, falling back to Tavily:",
+          exaError instanceof Error ? exaError.message : String(exaError),
+        );
+      }
+    }
+
+    // Tavily Fallback
+    log.info(`Performing Tavily Extract for urls: ${urlsArray.join(", ")}`);
     const response = await tavilyClient.extract(urlsArray, {
       query,
     });
@@ -1123,7 +1195,7 @@ export async function web_extract(
     }
   } catch (error) {
     log.error(
-      "Error in Tavily web_extract:",
+      "Error in web_extract:",
       error instanceof Error ? error : String(error),
     );
     return `Terjadi kesalahan saat mengekstrak konten web: ${error instanceof Error ? error.message : String(error)}`;

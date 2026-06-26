@@ -10,7 +10,7 @@ export type UserRole = "admin" | "moderator" | "vip";
 export type AIProviderPreference = "groq" | "google" | "openrouter" | "deepseek" | "auto";
 
 function resolveAIProviderPreference(): AIProviderPreference {
-  const raw = (process.env.AI_PROVIDER || "openrouter").toLowerCase();
+  const raw = (process.env.AI_PROVIDER || "deepseek").toLowerCase();
 
   if (
     raw === "google" ||
@@ -22,7 +22,7 @@ function resolveAIProviderPreference(): AIProviderPreference {
     return raw;
   }
 
-  return "openrouter";
+  return "deepseek";
 }
 
 function resolveNumberEnv(value: string | undefined, fallback: number): number {
@@ -65,9 +65,10 @@ export const BotConfig = {
   groqApiKey: process.env.GROQ_API_KEY || "", // Kunci API untuk Groq AI
   googleGenerativeAiApiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || "", // Kunci API untuk Google Generative AI
   tavilyApiKey: process.env.TAVILY_API_KEY || "", // Kunci API untuk Tavily AI
+  exaApiKey: process.env.EXA_API_KEY || "", // Kunci API untuk Exa AI
 
   // Pengaturan AI Provider Routing
-  aiProvider: resolveAIProviderPreference(), // groq | google | openrouter | auto
+  aiProvider: resolveAIProviderPreference(), // groq | google | openrouter | deepseek | auto
   aiModelGroq:
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
   aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
