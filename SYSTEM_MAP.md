@@ -158,4 +158,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed missing `deepseek` check in `UserPreferenceService.getAIProviderPreference` which caused fallback to openrouter.
 - **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Integrated Exa search and extract tools utilizing the exa-js SDK, with fallback mechanisms to Tavily API.
 - **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Made DeepSeek (deepseek-v4-flash) the default provider for all users and removed the VIP restriction.
+- **2026-06-27** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed animated sticker transparent background glitch on WhatsApp Desktop/Web by changing pixel format to rgba.
 

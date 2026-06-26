@@ -155,7 +155,7 @@ export async function createAnimatedSticker(
       "-c:v",
       "libwebp_anim",
       "-pix_fmt",
-      "yuva420p",
+      "rgba",
       "-lossless",
       "0",
       "-compression_level",
