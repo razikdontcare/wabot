@@ -149,7 +149,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Modified yt-dlp module and downloader command to parse and use -t mp4 preset option.
 - **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Reversed TikTok user-agent behavior to default to yt-dlp native/default UA, and added --curl-ua flag for explicit curl UA.
 - **2026-06-12** [patch] (agent/9f57c17c-0398-4c84-ae1f-81ff772d93a7): Added fallback mechanism to TTDL API with X-API-Key header from TTDL_API_KEY env for TikTok downloads.
-- **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added DeepSeek provider (deepseek-v4-flash) as VIP-only option in AI provider routing.
+- **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added DeepSeek provider (deepseek-flash) as VIP-only option in AI provider routing.
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Merged `ai_agent_tools.ts` into `ai_tools.ts` for improved maintainability.
 - **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added `web_extract` tool utilizing Tavily's Extract API for clean page content extraction.
 - **2026-06-16** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Optimized agent execution capability, step counts (30/60), context turns (40), Auto-RAG database search, status cleanup, and research keyword expansion.
@@ -158,7 +158,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Resolved `any` types in `DownloaderCommand.ts` fallback TikTok API response parser.
 - **2026-06-16** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed missing `deepseek` check in `UserPreferenceService.getAIProviderPreference` which caused fallback to openrouter.
 - **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Integrated Exa search and extract tools utilizing the exa-js SDK, with fallback mechanisms to Tavily API.
-- **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Made DeepSeek (deepseek-v4-flash) the default provider for all users and removed the VIP restriction.
+- **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Made DeepSeek (deepseek-flash) the default provider for all users and removed the VIP restriction.
 - **2026-06-27** [patch] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Fixed animated sticker transparent background glitch on WhatsApp Desktop/Web by changing pixel format to rgba.
 - **2026-06-27** [minor] (agent/6b0e1efd-8c9d-4d88-97c0-16f329b7d8fe): Added auxiliary vision model pipeline in AskAICommand to process image inputs on text-only models (like DeepSeek).
 - **2026-06-27** [patch] (agent/b4048922-83ae-4e2f-a6d8-c4636831e00c): Fixed database collection caching reconnect disconnects, progressive reconnection logout loop, implemented recursive wrapper message extraction, and integrated MongoDB-backed message store in BotClient.
@@ -166,5 +166,3 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-07-09** [patch] (agent/fd7a9281-1924-4aa3-b324-a8752de33779): Fixed MongoDB disconnection issues during WhatsApp reconnection by removing cached database/collection instances in all service classes and using dynamic getters.
 - **2026-07-18** [patch] (agent/fd7a9281-1924-4aa3-b324-a8752de33779): Extended MongoDB lazy collection getter refactoring to remaining database services (AIConversationService, AIResponseService, SessionService) to prevent MongoNotConnectedError in all commands/AI pipeline.
 - **2026-07-22** [patch] (agent/a30f8e9e-c934-4fe9-9cdd-1ee1b1271961): Separated AI step text from tool calling status log into distinct messages in AskAICommand and preserved working history status message after task completion.
-
-
