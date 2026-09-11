@@ -73,7 +73,7 @@ export const BotConfig = {
     process.env.AI_MODEL_GROQ || process.env.AI_MODEL || "openai/gpt-oss-120b",
   aiModelGoogle: process.env.AI_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiModelOpenRouter: process.env.AI_MODEL_OPENROUTER || "openrouter/owl-alpha",
-  aiModelDeepSeek: process.env.AI_MODEL_DEEPSEEK || "deepseek-v4-flash",
+  aiModelDeepSeek: process.env.AI_MODEL_DEEPSEEK || "deepseek-flash",
   aiMultimodalModelGoogle:
     process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
   aiEmbeddingModelGoogle:
