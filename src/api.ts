@@ -17,8 +17,9 @@
  * curl -u admin:admin123 http://localhost:5000/api/status
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { basicAuth } from "hono/basic-auth";
 import { getMongoClient } from "./infrastructure/config/mongo.js";
 import { CommandUsageService } from "./domain/services/CommandUsageService.js";
@@ -26,6 +27,7 @@ import { GameLeaderboardService } from "./domain/services/GameLeaderboardService
 import { BotClient } from "./app/client/BotClient.js";
 import {
   getBotConfigService,
+  log,
   type UserRole,
 } from "./infrastructure/config/config.js";
 import {
@@ -42,6 +44,8 @@ import { ADMIN_CONSOLE_STYLES } from "./infrastructure/web/adminConsoleStyles.js
 import { isMongoConnected } from "./infrastructure/config/mongo.js";
 import QRCode from "qrcode";
 import { createReadStream } from "fs";
+import { randomUUID } from "crypto";
+import { z } from "zod";
 import {
   getPublicDownload,
   startCleanupSchedule,
@@ -305,26 +309,240 @@ function getBotClient(): BotClient | null {
     : null;
 }
 
-// REST API: Send a WhatsApp message
-app.post("/api/send-message", async (c) => {
-  const { text, jid } = await c.req.json();
-  if (!jid || !text) {
-    return c.json({ error: "Missing 'jid' or 'text' in request body" }, 400);
+// --- Send message endpoint helpers -----------------------------------------
+
+// Longest text accepted for a single outbound message. WhatsApp itself allows
+// far more, but a sane cap keeps payloads (and abuse) bounded. Overridable so
+// deployments that need long messages can raise it without a code change.
+const MAX_MESSAGE_TEXT_LENGTH = readPositiveInt(
+  process.env.SEND_MESSAGE_MAX_LENGTH,
+  4096,
+);
+
+// Per-client limit for the send-message endpoint. WhatsApp aggressively bans
+// accounts that flood messages, so we throttle callers by default.
+const SEND_MESSAGE_RATE_MAX = readPositiveInt(
+  process.env.SEND_MESSAGE_RATE_MAX,
+  60,
+);
+const SEND_MESSAGE_RATE_WINDOW_MS = readPositiveInt(
+  process.env.SEND_MESSAGE_RATE_WINDOW_MS,
+  60_000,
+);
+
+function readPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value || "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+// Accepts either a full WhatsApp JID or a bare phone number (which is expanded
+// to an individual-chat JID). Returns the canonical JID, or null if invalid.
+const JID_PATTERN =
+  /^[0-9A-Za-z._:+-]+@(s\.whatsapp\.net|lid|g\.us|broadcast|newsletter)$/i;
+const PHONE_PATTERN = /^\+?[0-9](?:[0-9\s().-]*[0-9])?$/;
+
+function normalizeJid(input: string): string | null {
+  const raw = input.trim();
+  if (!raw) return null;
+
+  if (raw.includes("@")) {
+    return JID_PATTERN.test(raw) ? raw : null;
+  }
+
+  if (!PHONE_PATTERN.test(raw)) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 6 || digits.length > 15) return null;
+  return `${digits}@s.whatsapp.net`;
+}
+
+const sendMessageSchema = z.object({
+  jid: z
+    .string()
+    .trim()
+    .min(1, "'jid' is required")
+    .max(128, "'jid' is too long"),
+  text: z
+    .string()
+    .trim()
+    .min(1, "'text' must not be empty")
+    .max(
+      MAX_MESSAGE_TEXT_LENGTH,
+      `'text' must not exceed ${MAX_MESSAGE_TEXT_LENGTH} characters`,
+    ),
+});
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const rateLimitBuckets = new Map<string, RateLimitEntry>();
+
+function consumeRateLimit(key: string): {
+  allowed: boolean;
+  retryAfterSeconds: number;
+} {
+  const now = Date.now();
+
+  // Opportunistic cleanup so the map cannot grow without bound.
+  if (rateLimitBuckets.size > 1000) {
+    for (const [bucketKey, entry] of rateLimitBuckets) {
+      if (entry.resetAt <= now) rateLimitBuckets.delete(bucketKey);
+    }
+  }
+
+  const entry = rateLimitBuckets.get(key);
+  if (!entry || entry.resetAt <= now) {
+    rateLimitBuckets.set(key, {
+      count: 1,
+      resetAt: now + SEND_MESSAGE_RATE_WINDOW_MS,
+    });
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  if (entry.count >= SEND_MESSAGE_RATE_MAX) {
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+    };
+  }
+
+  entry.count += 1;
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function getClientKey(c: Context): string {
+  const forwarded = c.req.header("x-forwarded-for");
+  if (forwarded) {
+    return forwarded.split(",")[0]?.trim() || "unknown";
   }
   try {
-    const botRuntime = asBotRuntime(getBotClient());
-    const sock = botRuntime?.sock;
+    return getConnInfo(c).remote.address || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
-    if (!sock) {
-      return c.json({ error: "Bot is not ready or not connected" }, 503);
-    }
+// REST API: Send a WhatsApp message
+app.post("/api/send-message", async (c) => {
+  const requestId = randomUUID();
+  c.header("X-Request-Id", requestId);
 
-    await sock.sendMessage(jid, { text });
-    return c.json({ success: true });
-  } catch (error) {
+  // Reject explicitly non-JSON bodies early, but stay lenient when the client
+  // omits Content-Type (e.g. curl -d) and still attempt to parse JSON.
+  const contentType = (c.req.header("content-type") || "").toLowerCase();
+  if (contentType && !contentType.includes("application/json")) {
     return c.json(
-      { error: "Failed to send message", details: String(error) },
-      500,
+      {
+        error: "Content-Type must be application/json",
+        requestId,
+      },
+      415,
+    );
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      { error: "Request body must be valid JSON", requestId },
+      400,
+    );
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json(
+      { error: "Request body must be a JSON object", requestId },
+      400,
+    );
+  }
+
+  const parsed = sendMessageSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: "Invalid request body",
+        details: parsed.error.issues.map((issue) => ({
+          field: issue.path.length ? issue.path.join(".") : "(body)",
+          message: issue.message,
+        })),
+        requestId,
+      },
+      400,
+    );
+  }
+
+  const jid = normalizeJid(parsed.data.jid);
+  if (!jid) {
+    return c.json(
+      {
+        error:
+          "Invalid 'jid'. Provide a WhatsApp JID (e.g. 628123456789@s.whatsapp.net) or an E.164 phone number",
+        requestId,
+      },
+      400,
+    );
+  }
+
+  const { text } = parsed.data;
+
+  const clientKey = getClientKey(c);
+  const rate = consumeRateLimit(clientKey);
+  if (!rate.allowed) {
+    c.header("Retry-After", String(rate.retryAfterSeconds));
+    log.warn(
+      `[api] send-message rate limit hit by ${clientKey} (requestId=${requestId})`,
+    );
+    return c.json(
+      {
+        error: "Rate limit exceeded. Please retry later.",
+        retryAfterSeconds: rate.retryAfterSeconds,
+        requestId,
+      },
+      429,
+    );
+  }
+
+  const botRuntime = asBotRuntime(getBotClient());
+  const sock = botRuntime?.sock;
+
+  if (!sock) {
+    return c.json(
+      { error: "Bot is not ready or not connected", requestId },
+      503,
+    );
+  }
+
+  try {
+    const result = (await sock.sendMessage(jid, { text })) as
+      | { key?: { id?: string } }
+      | undefined;
+    const messageId = result?.key?.id;
+
+    log.info(
+      `[api] sent message ${messageId ?? "(unknown id)"} to ${jid} (requestId=${requestId})`,
+    );
+
+    return c.json(
+      {
+        success: true,
+        messageId: messageId ?? null,
+        jid,
+        requestId,
+      },
+      200,
+    );
+  } catch (error) {
+    // Log full details server-side; never leak internals to the caller.
+    log.error(
+      `[api] failed to send message to ${jid} (requestId=${requestId}):`,
+      error,
+    );
+    return c.json(
+      { error: "Failed to send message", requestId },
+      502,
     );
   }
 });
