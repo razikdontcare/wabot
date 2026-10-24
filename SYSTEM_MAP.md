@@ -2,8 +2,8 @@
 
 ## Metadata
 - **map_version**: 1.0.0
-- **last_updated**: 2026-07-22
-- **last_updated_by**: agent/a30f8e9e-c934-4fe9-9cdd-1ee1b1271961
+- **last_updated**: 2026-09-25
+- **last_updated_by**: agent/zed
 
 ## Project Overview
 WhatsApp bot with AI integration and modular command system. Built with TypeScript/Bun, using Baileys for WhatsApp connectivity and Hono for the API dashboard.
@@ -34,6 +34,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `AI_PROVIDER` | AI provider routing (google, groq, openrouter, deepseek, auto) |
 | `DASHBOARD_PORT` | Port for the Hono dashboard (default: 5000) |
 | `DEEPSEEK_API_KEY` | API key for DeepSeek AI (VIP-only provider) |
+| `SEND_MESSAGE_MAX_LENGTH` | Max characters for `/api/send-message` text (default: 4096) |
+| `SEND_MESSAGE_RATE_MAX` | Max `/api/send-message` requests per IP per window (default: 60) |
+| `SEND_MESSAGE_RATE_WINDOW_MS` | Rate-limit window for `/api/send-message` in ms (default: 60000) |
 
 ## Entry Points
 | Type | File | Description |
@@ -100,6 +103,11 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/shared/utils/whatsapp_formatter.ts` | Formats standard Markdown to WhatsApp-compatible markup | `formatResponseForWhatsApp` | #shared | #utils |
 | `src/shared/utils/ytdlp.ts` | YouTube download utility | `ytdlp` | #shared | #utils |
 
+### Documentation
+| Path | Purpose | Exports | #layer | #domain |
+| :--- | :--- | :--- | :--- | :--- |
+| `docs/SEND_MESSAGE_API.md` | Client integration guide for the `/api/send-message` endpoint (auth, JID formats, request/response, rate limits, examples) | N/A | #docs | #api |
+
 ## API Surface
 | Method | Path | Description | Auth Required |
 | :--- | :--- | :--- | :--- |
@@ -112,7 +120,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | GET | `/api/command-usage` | Get command usage stats | Yes |
 | GET | `/api/leaderboard` | Get game leaderboards | Yes |
 | GET | `/api/ops` | Get runtime ops summary | Yes |
-| POST | `/api/send-message` | Send a WhatsApp message via bot | Yes |
+| POST | `/api/send-message` | Send a WhatsApp message via bot (basic-auth; validates JID/text, per-IP rate limited) | Yes |
 | GET | `/api/config` | Get bot configuration | Yes |
 | POST | `/api/config` | Update bot configuration | Yes |
 | GET | `/api/qr` | Get current QR code as PNG | Yes |
@@ -125,6 +133,8 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `LogEntry` | `id`, `timestamp`, `level`, `message` | In-memory log representation |
 | `BotConfig` | `prefix`, `admins`, `aiProvider`, etc. | Core bot settings |
 | `AuthDocument` | `_id`, `data` (Binary) | MongoDB document for auth credentials |
+| `SendMessageRequest` | `jid`, `text` | Body for `POST /api/send-message` (validated by zod `sendMessageSchema`) |
+| `SendMessageResponse` | `success`, `messageId`, `jid`, `requestId` | Success payload for `POST /api/send-message` |
 
 ## Conventions
 - **Naming**: `PascalCase` for files/classes, `camelCase` for variables/methods.
@@ -134,6 +144,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **Gotcha**: `getMongoClient` uses a promise-based lock to prevent `MongoNotConnectedError` during concurrent initialization.
 - **Gotcha**: To prevent `MongoNotConnectedError` when the database client is recreated, avoid caching `db` or `collection` objects in asynchronous closures; fetch them dynamically from the active client on each request.
 - **Convention**: VIP-only providers (e.g. `deepseek`) are gated in `AskAICommand.handleProviderCommand` — the router itself is provider-agnostic.
+- **Gotcha**: `POST /api/send-message` normalizes bare E.164 numbers to `@s.whatsapp.net` and only accepts `@s.whatsapp.net`/`@lid`/`@g.us`/`@broadcast`/`@newsletter` suffixes; it is rate limited in-memory per IP (see `docs/SEND_MESSAGE_API.md`).
 
 ## Data Flow: "!help" Command
 1.  **Ingestion**: `BotClient` receives message via `baileys` socket event.
@@ -166,3 +177,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-07-09** [patch] (agent/fd7a9281-1924-4aa3-b324-a8752de33779): Fixed MongoDB disconnection issues during WhatsApp reconnection by removing cached database/collection instances in all service classes and using dynamic getters.
 - **2026-07-18** [patch] (agent/fd7a9281-1924-4aa3-b324-a8752de33779): Extended MongoDB lazy collection getter refactoring to remaining database services (AIConversationService, AIResponseService, SessionService) to prevent MongoNotConnectedError in all commands/AI pipeline.
 - **2026-07-22** [patch] (agent/a30f8e9e-c934-4fe9-9cdd-1ee1b1271961): Separated AI step text from tool calling status log into distinct messages in AskAICommand and preserved working history status message after task completion.
+- **2026-09-25** [minor] (agent/zed): Hardened `POST /api/send-message` with zod validation, safe JSON parsing, JID normalization/validation, per-IP rate limiting, request IDs, structured logging, and sanitized error responses.
+- **2026-09-25** [patch] (agent/zed): Added `docs/SEND_MESSAGE_API.md` client integration guide for the send-message endpoint.
