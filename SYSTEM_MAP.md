@@ -74,6 +74,16 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/domain/services/HangmanGameService.ts` | Logic for Hangman game | `HangmanGameService` | #domain | #games |
 | `src/domain/services/IGRSService.ts` | Integration with IGRS (game ratings) | `IGRSService` | #domain | #games |
 | `src/domain/services/ReminderService.ts` | Manages user reminders | `ReminderService` | #domain | #utils |
+| `src/domain/services/rpg/RpgEngine.ts` | Text RPG rules engine: movement, combat, items, deltas, defeat, party turns, votes | `createSoloRun`, `combatAction`, `partyCombatAction`, `resolveVote` | #domain | #games |
+| `src/domain/services/rpg/RpgPresenter.ts` | Text RPG scenes, choices, party roster and views | `renderScene`, `buildChoices`, `renderPartyStatus` | #domain | #games |
+| `src/domain/services/rpg/RpgRunService.ts` | MongoDB persistence for RPG runs (solo + party) | `RpgRunService` | #domain | #games |
+| `src/domain/services/rpg/rpgContent.ts` | Static folklore world, archetypes, items and bestiary | `buildStaticRooms`, `RPG_WORLD` | #domain | #games |
+| `src/domain/services/rpg/rpgRules.ts` | Pure RPG rules: dice, checks, damage, XP, inventory | `attackRoll`, `damageFor`, `gainXp` | #domain | #games |
+| `src/domain/services/rpg/rpgSchemas.ts` | Zod contracts for RPG AI intent/narration/world/journal | `rpgIntentSchema`, `rpgSceneSchema`, `rpgWorldSchema` | #domain | #ai |
+| `src/domain/services/rpg/RpgNarratorService.ts` | AI intent parsing, scene narration and journal compression (prose only) | `RpgNarratorService` | #domain | #ai |
+| `src/domain/services/rpg/RpgWorldService.ts` | One-shot world bible generation with static fallback | `RpgWorldService` | #domain | #ai |
+| `src/domain/services/rpg/RpgMapRenderer.ts` | Deterministic parchment map SVG → PNG with cache and text fallback | `renderMapPng`, `buildMapSvg` | #domain | #games |
+| `src/domain/services/rpg/mapTheme.ts` | Map palette, medallion glyphs and terrain decoration | `MAP`, `medallionGlyph`, `terrainGlyph` | #domain | #games |
 | `src/domain/services/SessionService.ts` | Manages user/group game sessions | `SessionService` | #domain | #bot |
 | `src/domain/services/TixService.ts` | Integration with the unofficial TIX catalog API (cities, movies, catalog, theaters, schedules) | `TixService`, `findMoviesByTitle`, `jakartaDate` | #domain | #utils |
 | `src/domain/services/UserPreferenceService.ts` | Manages user-specific preferences and structured memory graph | `UserPreferenceService`, `UserPreference` | #domain | #bot |
@@ -107,6 +117,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | Path | Purpose | Exports | #layer | #domain |
 | :--- | :--- | :--- | :--- | :--- |
 | `docs/SEND_MESSAGE_API.md` | Client integration guide for the `/api/send-message` endpoint (auth, JID formats, request/response, rate limits, examples) | N/A | #docs | #api |
+| `docs/TEXT_RPG_DESIGN.md` | Design spec for the persistent text RPG (solo + party, engine-authoritative rules, AI narration contracts) | N/A | #docs | #games |
 
 ## API Surface
 | Method | Path | Description | Auth Required |
@@ -183,3 +194,6 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-10-24** [patch] (agent/zed): TIX API now requires authentication; `TixService` sends `TIX_API_KEY` in the `x-api-key` header and reports missing/rejected keys with actionable messages.
 - **2026-10-24** [patch] (agent/zed): Removed Qdrant knowledge-base tooling (Auto-RAG, `knowledge_search`/`upsert_knowledge` tools, `!ai kb` commands, `AIKnowledgeVectorService`, QDRANT_* env config) from the AI pipeline.
 - **2026-10-24** [patch] (agent/zed): DeepSeek now handles image input natively; removed the auxiliary Google vision-description pipeline and added vision-aware routing (`requiresMultimodal`) that prefers a vision-capable provider and attaches image parts whenever the routed model supports them. Bumped `@ai-sdk/deepseek` to `^2.0.77`, the first 2.x release that forwards `image_url` parts.
+- **2026-10-24** [minor] (agent/zed): Started the text RPG (M0): `rpg` command, engine-authored rules (dice/combat/items/movement), `rpg_runs` persistence, deterministic fallback narration, and unit tests. Design in `docs/TEXT_RPG_DESIGN.md`.
+- **2026-10-24** [minor] (agent/zed): RPG M1 — AI narrator (`RpgNarratorService`, zod contracts, world bible with fallback), illustrated deterministic PNG map (`RpgMapRenderer` + `mapTheme`, cached) sent by `!rpg peta`, and DejaVu fonts in the runtime image.
+- **2026-10-24** [minor] (agent/zed): RPG M2 — party mode: lobby/join/start, shared gold+inventory, 45s vote turns (early strict majority, lazy deadline), party combat with shared XP, owner migration, and party views. `!rpg peta` works for both modes.
