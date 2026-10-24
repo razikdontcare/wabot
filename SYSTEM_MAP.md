@@ -76,6 +76,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/domain/services/IGRSService.ts` | Integration with IGRS (game ratings) | `IGRSService` | #domain | #games |
 | `src/domain/services/ReminderService.ts` | Manages user reminders | `ReminderService` | #domain | #utils |
 | `src/domain/services/SessionService.ts` | Manages user/group game sessions | `SessionService` | #domain | #bot |
+| `src/domain/services/TixService.ts` | Integration with the unofficial TIX catalog API (cities, movies, catalog, theaters, schedules) | `TixService`, `findMoviesByTitle`, `jakartaDate` | #domain | #utils |
 | `src/domain/services/UserPreferenceService.ts` | Manages user-specific preferences and structured memory graph | `UserPreferenceService`, `UserPreference` | #domain | #bot |
 | `src/domain/services/VIPService.ts` | Manages VIP status and benefits | `VIPService` | #domain | #bot |
 
@@ -179,3 +180,4 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-07-22** [patch] (agent/a30f8e9e-c934-4fe9-9cdd-1ee1b1271961): Separated AI step text from tool calling status log into distinct messages in AskAICommand and preserved working history status message after task completion.
 - **2026-09-25** [minor] (agent/zed): Hardened `POST /api/send-message` with zod validation, safe JSON parsing, JID normalization/validation, per-IP rate limiting, request IDs, structured logging, and sanitized error responses.
 - **2026-09-25** [patch] (agent/zed): Added `docs/SEND_MESSAGE_API.md` client integration guide for the send-message endpoint.
+- **2026-10-24** [minor] (agent/zed): Added `tix` command (`TixCommand` + `TixService`) for TIX cinema listings, showtimes, theaters and catalog summaries via tix.razik.id.
