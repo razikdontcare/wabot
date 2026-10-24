@@ -545,7 +545,7 @@ export class DownloaderCommand extends CommandInterface {
       });
     }
 
-    const apiUrl = `https://ttdl.razik.net/api/v1/tiktok?url=${encodeURIComponent(url)}`;
+    const apiUrl = `https://ttdl.razik.id/api/v1/tiktok?url=${encodeURIComponent(url)}`;
     const response = await fetch(apiUrl, {
       headers: {
         "X-API-Key": ttdlKey,
@@ -581,14 +581,14 @@ export class DownloaderCommand extends CommandInterface {
         };
       }
       const json = await response.json() as TTDLResponse;
-      
+
       if (json.data) {
         if (json.data.description) {
           title = json.data.description;
         } else if (json.data.title) {
           title = json.data.title;
         }
-        
+
         if (downloadMode === "audio") {
           mediaUrl = json.data.media?.music?.playUrl || json.data.media?.music?.playAddr || "";
           duration = json.data.media?.music?.duration || 0;
