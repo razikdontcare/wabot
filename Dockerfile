@@ -29,8 +29,8 @@ RUN mkdir -p dist/app/commands/prompts && \
 # Production stage
 FROM node:24-alpine
 
-# Install runtime dependencies only
-RUN apk add --no-cache vips-dev ffmpeg python3 py3-pip curl ca-certificates aria2
+# Install runtime dependencies only (fontconfig + DejaVu for RPG map SVG text)
+RUN apk add --no-cache vips-dev ffmpeg python3 py3-pip curl ca-certificates aria2 fontconfig font-dejavu
 
 # Install yt-dlp with default dependencies
 RUN python3 -m venv /opt/yt-dlp-venv \
