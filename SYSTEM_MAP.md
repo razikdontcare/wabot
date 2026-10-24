@@ -181,3 +181,4 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-09-25** [minor] (agent/zed): Hardened `POST /api/send-message` with zod validation, safe JSON parsing, JID normalization/validation, per-IP rate limiting, request IDs, structured logging, and sanitized error responses.
 - **2026-09-25** [patch] (agent/zed): Added `docs/SEND_MESSAGE_API.md` client integration guide for the send-message endpoint.
 - **2026-10-24** [minor] (agent/zed): Added `tix` command (`TixCommand` + `TixService`) for TIX cinema listings, showtimes, theaters and catalog summaries via tix.razik.id.
+- **2026-10-24** [patch] (agent/zed): TIX API now requires authentication; `TixService` sends `TIX_API_KEY` in the `x-api-key` header and reports missing/rejected keys with actionable messages.

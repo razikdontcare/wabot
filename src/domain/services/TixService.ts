@@ -14,6 +14,14 @@ export const TIX_DEFAULT_CITY =
   process.env.TIX_DEFAULT_CITY?.trim().toUpperCase() || "JAKARTA";
 export const TIX_TIME_ZONE = "Asia/Jakarta";
 
+/**
+ * The service now gates every /v1 endpoint behind an API key sent in the
+ * `x-api-key` header. Read lazily so a key set after module load still works.
+ */
+export function getTixApiKey(): string {
+  return process.env.TIX_API_KEY?.trim() ?? "";
+}
+
 export type TixMovieType = "now_playing" | "upcoming" | "both";
 
 export interface TixCity {
@@ -356,8 +364,19 @@ export class TixService {
     path: string,
     params?: Record<string, string>,
   ): Promise<T> {
+    const apiKey = getTixApiKey();
+    if (!apiKey) {
+      throw new TixApiError(
+        "API key TIX belum diset. Tambahkan TIX_API_KEY di file .env lalu restart bot.",
+        { code: "missing_api_key" },
+      );
+    }
+
     try {
-      const response = await this.client.get<T>(path, { params });
+      const response = await this.client.get<T>(path, {
+        params,
+        headers: { "x-api-key": apiKey },
+      });
       return response.data;
     } catch (error) {
       throw this.toTixError(path, error);
@@ -373,12 +392,18 @@ export class TixService {
           : (body?.message ?? body?.error ?? error.message);
       const code =
         typeof body === "object" && body?.error ? body.error : undefined;
+      const status = error.response?.status;
 
       log.error(`TIX API request failed (${path}): ${message}`);
-      return new TixApiError(message, {
-        status: error.response?.status,
-        code,
-      });
+
+      if (status === 401 || status === 403) {
+        return new TixApiError(
+          "API key TIX ditolak. Periksa nilai TIX_API_KEY di file .env.",
+          { status, code: "unauthorized" },
+        );
+      }
+
+      return new TixApiError(message, { status, code });
     }
 
     const message =
