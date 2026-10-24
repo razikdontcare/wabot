@@ -1,5 +1,4 @@
 import { downloadMediaMessage, proto, WAMessage } from "baileys";
-import { createHash } from "crypto";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
@@ -13,7 +12,7 @@ import { getMongoClient } from "../../infrastructure/config/mongo.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
-import { generateText, tool as createTool, type ModelMessage, ToolLoopAgent } from "ai";
+import { tool as createTool, type ModelMessage, ToolLoopAgent } from "ai";
 import { createAskAgent, runSubagentTask } from "../agents/AskAgent.js";
 import { z } from "zod";
 import { AIProviderRouterService } from "../../domain/services/AIProviderRouterService.js";
@@ -21,11 +20,9 @@ import {
   execute_bot_command,
   get_bot_commands,
   get_command_help,
-  knowledge_search,
   reply_chat_message,
   send_chat_media,
   send_chat_message,
-  upsert_knowledge,
   web_search,
   web_extract,
   delete_file,
@@ -43,10 +40,6 @@ import {
   loadPersonalityPrompt,
   type AIPersonality,
 } from "../../shared/utils/promptLoader.js";
-import {
-  AIKnowledgeVectorService,
-  type KnowledgeScope,
-} from "../../domain/services/AIKnowledgeVectorService.js";
 import type { Logger } from "pino";
 
 interface AIImageInput {
@@ -68,14 +61,13 @@ export class AskAICommand extends CommandInterface {
 • ${BotConfig.prefix}ai provider <groq|google|openrouter|deepseek|auto|default> — Atur provider AI Anda
 • ${BotConfig.prefix}ai personality — Lihat personality AI Anda
 • ${BotConfig.prefix}ai personality <nexa|luna|default> — Ganti personality AI
-• ${BotConfig.prefix}ai kb help — Bantuan knowledge base (vector DB)
 • ${BotConfig.prefix}ai help — Tampilkan bantuan ini
 
 *Catatan:*
 • Setiap pengguna memiliki sesi percakapan pribadi
 • Sesi otomatis berakhir setelah 10 menit tidak aktif
 • AI akan mengingat konteks percakapan selama sesi berlangsung
-• Jika input berupa gambar, request otomatis dirutekan ke Gemini
+• Jika input berupa gambar, model vision (DeepSeek/Gemini) langsung membacanya
 
 👑 *VIP Members:* Unlimited uses tanpa cooldown!
 
@@ -91,7 +83,6 @@ export class AskAICommand extends CommandInterface {
   };
 
   private providerRouter = AIProviderRouterService.getInstance();
-  private knowledgeVectorService = AIKnowledgeVectorService.getInstance();
   private conversationService = AIConversationService.getInstance();
   private responseService = AIResponseService.getInstance();
   private userPreferenceService: UserPreferenceService | null = null;
@@ -135,13 +126,9 @@ export class AskAICommand extends CommandInterface {
 
         case "kb":
         case "knowledge":
-          await this.handleKnowledgeCommand(
-            user,
-            jid,
-            sock,
-            args.slice(1),
-            msg,
-          );
+          await sock.sendMessage(jid, {
+            text: "Fitur knowledge base (vector DB) sudah dihapus. Gunakan AI seperti biasa, atau ketik *!ai help*.",
+          });
           return;
       }
     }
@@ -245,28 +232,6 @@ export class AskAICommand extends CommandInterface {
         log.error("Failed to load user profile graph:", error);
       }
 
-      // Perform Auto-RAG search if knowledge base is configured
-      let autoRagContext = "";
-      if (this.knowledgeVectorService.isConfigured() && prompt.trim()) {
-        try {
-          const results = await this.knowledgeVectorService.searchKnowledge({
-            query: prompt,
-            userId: user,
-            groupId: isGroupChat ? jid : undefined,
-            scope: "auto",
-            limit: 3,
-          });
-          if (results.length > 0) {
-            autoRagContext = results
-              .map((item, index) => `${index + 1}. ${item.text}`)
-              .join("\n");
-            log.info(`Auto-RAG search injected ${results.length} relevant context item(s).`);
-          }
-        } catch (error) {
-          log.error("Failed to perform auto-RAG search:", error);
-        }
-      }
-
       const response = await this.getAICompletion(
         history,
         user,
@@ -278,7 +243,6 @@ export class AskAICommand extends CommandInterface {
         imageInput,
         userProviderPreference,
         userPersonalityPreference,
-        autoRagContext,
         profileGraphContext,
       );
 
@@ -297,27 +261,6 @@ export class AskAICommand extends CommandInterface {
             response,
           );
         }
-      }
-
-      // Persist turn-level semantic memory to vector DB when configured.
-      try {
-        const sourceId = this.buildDeterministicChatTurnSourceId(
-          user,
-          jid,
-          prompt,
-          msg,
-        );
-
-        await upsert_knowledge({
-          text: `User: ${prompt}\nAssistant: ${response}`,
-          userId: user,
-          groupId: isGroupChat ? jid : undefined,
-          scope: isGroupChat ? "group" : "user",
-          sourceType: "chat_turn",
-          sourceId,
-        });
-      } catch (error) {
-        log.error("Failed to store vector knowledge for AI turn:", error);
       }
 
       // Do not send the model text directly; the model should respond via tools.
@@ -340,7 +283,6 @@ export class AskAICommand extends CommandInterface {
     imageInput?: AIImageInput | null,
     userProviderPreference?: AIProviderPreference | null,
     userPersonalityPreference?: AIPersonality | null,
-    autoRagContext?: string,
     profileGraphContext?: string,
   ): Promise<string> {
     let statusMsgKey: proto.IMessageKey | undefined;
@@ -378,55 +320,10 @@ export class AskAICommand extends CommandInterface {
       const lastUserMessage =
         conversationHistory.findLast((m) => m.role === "user")?.content || "";
 
-      const mainProvider = userProviderPreference || BotConfig.aiProvider;
-      const mainModelSupportsVision = mainProvider === "google";
-
-      let imageDescription = "";
-      if (imageInput && !mainModelSupportsVision) {
-        try {
-          log.info("Auxiliary vision model activated to analyze image...");
-          const auxiliaryRoute = this.providerRouter.getRoutedModel({
-            requiresMultimodal: true,
-          });
-
-          const base64Content = imageInput.dataUrl.split(";base64,").pop() || "";
-          const imageBuffer = Buffer.from(base64Content, "base64");
-
-          const userPrompt = lastUserMessage || "Describe this image in detail.";
-
-          const response = await generateText({
-            model: auxiliaryRoute.model,
-            messages: [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text: `Analyze this image in the context of the user prompt: "${userPrompt}". Describe what you see factually, focusing on objects, text, people, colors, and layout.`,
-                  },
-                  {
-                    type: "image",
-                    image: imageBuffer,
-                    mediaType: imageInput.mimeType,
-                  },
-                ],
-              },
-            ],
-          });
-
-          imageDescription = response.text;
-          log.info("Auxiliary vision model analysis completed.");
-        } catch (visionError) {
-          log.error(
-            "Auxiliary vision model analysis failed:",
-            visionError instanceof Error ? visionError.message : String(visionError),
-          );
-          imageDescription = "Failed to analyze image due to auxiliary vision model error.";
-        }
-      }
-
+      // Vision-capable providers (DeepSeek, Gemini) read the image directly;
+      // a text-only provider is only used when no vision key is configured.
       const route = this.providerRouter.getRoutedModel({
-        requiresMultimodal: mainModelSupportsVision,
+        requiresMultimodal: Boolean(imageInput),
         preferredProvider: userProviderPreference || undefined,
       });
 
@@ -435,11 +332,10 @@ export class AskAICommand extends CommandInterface {
         finalSystemPrompt += `\n\nYou are currently chatting with user: ${userPushName}`;
       }
 
-      if (imageDescription) {
-        finalSystemPrompt += `\n\n### IMAGE ANALYSIS (FROM AUXILIARY VISION MODEL)\n` +
-          `The user attached an image to their request. Since your current model is text-only, here is the analysis/description of the image from our auxiliary vision model:\n` +
-          `${imageDescription}\n` +
-          `Use this analysis to answer the user's questions about the image.`;
+      if (imageInput && !route.supportsMultimodal) {
+        finalSystemPrompt += `\n\n### IMAGE ATTACHED BUT NOT PROCESSABLE\n` +
+          `The user attached an image, but the active model (${route.provider}/${route.modelId}) cannot read images.\n` +
+          `Tell the user briefly that the current AI provider cannot process images and that they can switch provider (DeepSeek or Google) to get the image analyzed. Then answer any text part of their request.`;
       }
 
       if (profileGraphContext) {
@@ -449,12 +345,6 @@ export class AskAICommand extends CommandInterface {
           `Refer to this to customize nickname, greeting, preferences, or personal details.`;
       }
 
-      if (autoRagContext) {
-        finalSystemPrompt += `\n\n### RELEVANT BACKGROUND INFORMATION (AUTO-RAG)\n` +
-          `These are snippets retrieved from the user's/group's past conversations and database, match-relevant to their current query:\n` +
-          `${autoRagContext}`;
-      }
-
       finalSystemPrompt +=
         `\n\nUser-facing output rule: You can only communicate back to the user through \`reply_message()\`, \`send_message()\`, and \`send_media()\`` +
         ` Always deliver the actual response using reply_message() or send_message().` +
@@ -462,11 +352,10 @@ export class AskAICommand extends CommandInterface {
 
       // --- Memory & Context Protocol ---
       finalSystemPrompt += `\n\n### MEMORY & CONTEXT PROTOCOL
-1. **Proactive Knowledge Search**: Before answering questions about the user, previous events, or complex topics, always use \`knowledge_search()\` to see if there is relevant information in the long-term memory or past conversations.
-2. **Global Memory Access**: Use \`read_memory()\` to check \`MEMORY.md\` for high-level personal details, global facts, or persistent instructions about the user that might not be in the vector search.
-3. **Contextual Awareness**: Use the information found to personalize your response and maintain consistency.
-4. **Memory Updates**: If the user shares important personal details (e.g., their name, preferences, or significant life events), use \`update_memory()\` to store this for future reference.
-5. **Knowledge Upsert**: For factual information that might be useful later, the system automatically saves chat turns, but you can use \`write_file()\` to specific knowledge files if requested.`;
+1. **Global Memory Access**: Use \`read_memory()\` to check \`MEMORY.md\` for high-level personal details, global facts, or persistent instructions about the user.
+2. **Contextual Awareness**: Use the information found to personalize your response and maintain consistency.
+3. **Memory Updates**: If the user shares important personal details (e.g., their name, preferences, or significant life events), use \`update_memory()\` to store this for future reference.
+4. **Durable Facts Only**: Store stable preferences, identities, recurring instructions, and long-lived decisions; skip transient chatter.`;
 
       // --- Deep Research Enhancement ---
       const isResearchIntent = this.detectResearchIntent(lastUserMessage);
@@ -513,7 +402,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         }
 
         if (
-          route.provider === "google" &&
+          route.supportsMultimodal &&
           imageInput &&
           message.role === "user" &&
           index === latestUserMessageIndex
@@ -582,23 +471,6 @@ You have identified a research-heavy request. Follow these steps for maximum acc
               return `Error executing delegated task: ${err instanceof Error ? err.message : String(err)}`;
             }
           },
-        }),
-        knowledge_search: createTool({
-          description:
-            "Search internal knowledge base (Qdrant) for relevant context from stored conversations/documents.",
-          inputSchema: z.object({
-            query: z.string().min(1),
-            scope: z.enum(["auto", "user", "group", "global"]).optional(),
-            limit: z.number().int().min(1).max(10).optional(),
-          }),
-          execute: async ({ query, scope, limit }) =>
-            knowledge_search({
-              query,
-              scope,
-              limit,
-              userId: user,
-              groupId: jid?.endsWith("@g.us") ? jid : undefined,
-            }),
         }),
         web_search: createTool({
           description: "Search the web for information",
@@ -791,7 +663,6 @@ You have identified a research-heavy request. Follow these steps for maximum acc
       const toolEmojis: Record<string, string> = {
         update_profile_trait: "👤",
         delegate_task: "👥",
-        knowledge_search: "🔍",
         web_search: "🌐",
         web_extract: "📥",
         send_message: "📤",
@@ -1062,16 +933,18 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         textRouteText = "tidak tersedia (API key provider belum diatur)";
       }
 
-      let imageRouteText = "google (Gemini)";
+      let imageRouteText = "tidak tersedia (API key DeepSeek/Gemini belum diatur)";
       try {
         const imageRoute = this.providerRouter.getRoutedModel({
           preferredProvider: effectivePreference,
           requiresMultimodal: true,
         });
-        imageRouteText = `${imageRoute.provider} (${imageRoute.modelId})`;
+        if (imageRoute.supportsMultimodal) {
+          imageRouteText = `${imageRoute.provider} (${imageRoute.modelId})`;
+        }
       } catch {
         imageRouteText =
-          "tidak tersedia (GOOGLE_GENERATIVE_AI_API_KEY belum diatur)";
+          "tidak tersedia (API key DeepSeek/Gemini belum diatur)";
       }
 
       await sock.sendMessage(jid, {
@@ -1139,7 +1012,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         text:
           `✅ Preferensi AI provider Anda diset ke *${requested}*.\n` +
           `Rute teks saat ini: ${textRoute.provider} (${textRoute.modelId}).\n` +
-          `Untuk input gambar, sistem otomatis memakai Gemini jika tersedia.` +
+          `Untuk input gambar, dipakai model vision (DeepSeek/Gemini) bila API key-nya tersedia.` +
           fallbackNote,
       });
     } catch (error) {
@@ -1218,601 +1091,6 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         text: "Terjadi kesalahan saat menyimpan preferensi personality AI.",
       });
     }
-  }
-
-  private async handleKnowledgeCommand(
-    user: string,
-    jid: string,
-    sock: WebSocketInfo,
-    args: string[],
-    msg: proto.IWebMessageInfo,
-  ): Promise<void> {
-    const action = args[0]?.toLowerCase() || "help";
-    const isGroupChat = jid.endsWith("@g.us");
-    const defaultScope = this.getDefaultKnowledgeScope(jid);
-
-    if (action === "help") {
-      await sock.sendMessage(jid, {
-        text:
-          `*Knowledge Base (Vector DB)*\n\n` +
-          `• ${BotConfig.prefix}ai kb status\n` +
-          `• ${BotConfig.prefix}ai kb list [user|group|global] [limit]\n` +
-          `• ${BotConfig.prefix}ai kb add [user|group|global] <teks>\n` +
-          `• ${BotConfig.prefix}ai kb addurl [user|group|global] <url>\n` +
-          `• ${BotConfig.prefix}ai kb delete [user|group|global] <sourceId>\n` +
-          `• ${BotConfig.prefix}ai kb reindex [user|group|global] <sourceId>\n` +
-          `• ${BotConfig.prefix}ai kb clear (Hanya Admin)\n\n` +
-          `Catatan:\n` +
-          `- Scope default: *${defaultScope}*\n` +
-          `- Scope group hanya bisa dipakai di chat grup\n` +
-          `- Operasi tulis scope group/global butuh role admin atau moderator bot`,
-      });
-      return;
-    }
-
-    if (action === "clear") {
-      const roles = await getUserRoles(user);
-      if (!roles.includes("admin")) {
-        await sock.sendMessage(jid, {
-          text: "❌ Hanya Admin yang bisa mengosongkan seluruh knowledge base.",
-        });
-        return;
-      }
-
-      try {
-        await this.knowledgeVectorService.clearAllKnowledge();
-        await sock.sendMessage(jid, {
-          text: "✅ Knowledge base berhasil dikosongkan. Semua data Qdrant telah dihapus.",
-        });
-      } catch (error) {
-        log.error("Failed to clear knowledge base:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat mengosongkan knowledge base.",
-        });
-      }
-
-      return;
-    }
-
-    if (action === "status") {
-      try {
-        const status = await this.knowledgeVectorService.getStatus({
-          scope: defaultScope,
-          userId: user,
-          groupId: isGroupChat ? jid : undefined,
-        });
-
-        if (!status.configured) {
-          await sock.sendMessage(jid, {
-            text:
-              `❌ Knowledge base belum aktif.\n` +
-              `Pastikan env berikut sudah diisi: QDRANT_URL, QDRANT_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY.`,
-          });
-          return;
-        }
-
-        await sock.sendMessage(jid, {
-          text:
-            `*Status Knowledge Base*\n\n` +
-            `• Collection: ${status.collection}\n` +
-            `• Embedding model: ${status.embeddingModel}\n` +
-            `• Vector size: ${status.vectorSize ?? "unknown"}\n` +
-            `• Top K default: ${status.topK}\n` +
-            `• Min score default: ${status.minScore}\n` +
-            `• Total points: ${status.totalPoints ?? "unknown"}\n` +
-            `• Scope aktif: ${status.scope || defaultScope}\n` +
-            `• Points scope aktif: ${status.scopedPoints ?? "unknown"}`,
-        });
-      } catch (error) {
-        log.error("Failed to get knowledge base status:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat membaca status knowledge base.",
-        });
-      }
-
-      return;
-    }
-
-    if (!this.knowledgeVectorService.isConfigured()) {
-      await sock.sendMessage(jid, {
-        text:
-          `❌ Knowledge base belum aktif.\n` +
-          `Isi dulu QDRANT_URL, QDRANT_API_KEY, dan GOOGLE_GENERATIVE_AI_API_KEY.`,
-      });
-      return;
-    }
-
-    if (action === "list") {
-      const { scope, consumed } = this.parseKnowledgeScope(args[1], jid);
-      const scopeContext = this.resolveKnowledgeScopeContext(scope, user, jid);
-      if (scopeContext.error) {
-        await sock.sendMessage(jid, { text: scopeContext.error });
-        return;
-      }
-
-      const rawLimit = args[consumed ? 2 : 1];
-      const parsedLimit = Number(rawLimit);
-      const limit = Number.isFinite(parsedLimit)
-        ? Math.max(1, Math.min(parsedLimit, 20))
-        : 8;
-
-      try {
-        const items = await this.knowledgeVectorService.listKnowledge({
-          scope,
-          limit,
-          ...scopeContext,
-        });
-
-        if (items.length === 0) {
-          await sock.sendMessage(jid, {
-            text: `Tidak ada data knowledge pada scope *${scope}* saat ini.`,
-          });
-          return;
-        }
-
-        const lines = items.map((item, index) => {
-          const createdAtText = item.createdAt
-            ? new Date(item.createdAt).toLocaleString("id-ID")
-            : "unknown-time";
-          const sourceIdText = item.sourceId || "(tanpa sourceId)";
-          return (
-            `${index + 1}. [${item.scope}] ${item.sourceType} | ${sourceIdText}\n` +
-            `   id: ${item.id}\n` +
-            `   at: ${createdAtText}\n` +
-            `   preview: ${item.preview}`
-          );
-        });
-
-        await sock.sendMessage(jid, {
-          text:
-            `*Daftar Knowledge (${scope})*\n\n${lines.join("\n\n")}` +
-            `\n\nGunakan sourceId untuk delete/reindex.`,
-        });
-      } catch (error) {
-        log.error("Failed to list knowledge items:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat mengambil daftar knowledge.",
-        });
-      }
-
-      return;
-    }
-
-    if (action === "add") {
-      const { scope, consumed } = this.parseKnowledgeScope(args[1], jid);
-      const hasPermission = await this.canWriteKnowledgeScope(scope, user);
-      if (!hasPermission) {
-        await sock.sendMessage(jid, {
-          text: "❌ Anda tidak punya izin untuk menulis knowledge pada scope group/global.",
-        });
-        return;
-      }
-
-      const scopeContext = this.resolveKnowledgeScopeContext(scope, user, jid);
-      if (scopeContext.error) {
-        await sock.sendMessage(jid, { text: scopeContext.error });
-        return;
-      }
-
-      const textFromArgs = args
-        .slice(consumed ? 2 : 1)
-        .join(" ")
-        .trim();
-      const quotedText = this.extractQuotedText(msg);
-      const rawText = textFromArgs || quotedText || "";
-      const normalizedText = rawText.replace(/\s+/g, " ").trim();
-
-      if (!normalizedText) {
-        await sock.sendMessage(jid, {
-          text:
-            `Gunakan: ${BotConfig.prefix}ai kb add [user|group|global] <teks>\n` +
-            `Atau reply pesan lalu kirim: ${BotConfig.prefix}ai kb add`,
-        });
-        return;
-      }
-
-      try {
-        const sourceId = `manual:${Date.now()}`;
-        const inserted = await this.knowledgeVectorService.upsertKnowledge({
-          text: normalizedText,
-          scope,
-          sourceType: "manual_text",
-          sourceId,
-          metadata: {
-            ingestedBy: user,
-            ingestedAt: Date.now(),
-          },
-          ...scopeContext,
-        });
-
-        await sock.sendMessage(jid, {
-          text:
-            `✅ Knowledge berhasil ditambahkan.\n` +
-            `• Scope: ${scope}\n` +
-            `• Source ID: ${sourceId}\n` +
-            `• Chunks tersimpan: ${inserted}`,
-        });
-      } catch (error) {
-        log.error("Failed to add manual knowledge:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat menyimpan knowledge manual.",
-        });
-      }
-
-      return;
-    }
-
-    if (action === "addurl" || action === "add-url") {
-      const { scope, consumed } = this.parseKnowledgeScope(args[1], jid);
-      const hasPermission = await this.canWriteKnowledgeScope(scope, user);
-      if (!hasPermission) {
-        await sock.sendMessage(jid, {
-          text: "❌ Anda tidak punya izin untuk menulis knowledge pada scope group/global.",
-        });
-        return;
-      }
-
-      const scopeContext = this.resolveKnowledgeScopeContext(scope, user, jid);
-      if (scopeContext.error) {
-        await sock.sendMessage(jid, { text: scopeContext.error });
-        return;
-      }
-
-      const urlCandidate = (args[consumed ? 2 : 1] || "").trim();
-      if (!urlCandidate) {
-        await sock.sendMessage(jid, {
-          text: `Gunakan: ${BotConfig.prefix}ai kb addurl [user|group|global] <url>`,
-        });
-        return;
-      }
-
-      let parsedUrl: URL;
-      try {
-        parsedUrl = new URL(urlCandidate);
-      } catch {
-        await sock.sendMessage(jid, {
-          text: `URL tidak valid: ${urlCandidate}`,
-        });
-        return;
-      }
-
-      try {
-        const { title, text } = await this.fetchUrlAsPlainText(
-          parsedUrl.toString(),
-        );
-
-        if (!text || text.length < 40) {
-          await sock.sendMessage(jid, {
-            text: "Konten URL terlalu pendek atau tidak bisa diekstrak. Coba URL lain.",
-          });
-          return;
-        }
-
-        const sourceId = `url:${parsedUrl.toString()}`;
-
-        // Replace previous index for the same URL in the same scope/context.
-        await this.knowledgeVectorService.deleteKnowledgeBySource({
-          sourceId,
-          scope,
-          ...scopeContext,
-        });
-
-        const payloadText =
-          `Source URL: ${parsedUrl.toString()}\n` +
-          (title ? `Title: ${title}\n\n` : "") +
-          text;
-
-        const inserted = await this.knowledgeVectorService.upsertKnowledge({
-          text: payloadText,
-          scope,
-          sourceType: "url",
-          sourceId,
-          metadata: {
-            ingestedBy: user,
-            ingestedAt: Date.now(),
-            url: parsedUrl.toString(),
-            title: title || "",
-          },
-          ...scopeContext,
-        });
-
-        await sock.sendMessage(jid, {
-          text:
-            `✅ URL berhasil diindeks ke knowledge base.\n` +
-            `• Scope: ${scope}\n` +
-            `• Source ID: ${sourceId}\n` +
-            `• Chunks tersimpan: ${inserted}`,
-        });
-      } catch (error) {
-        log.error("Failed to ingest URL knowledge:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat mengindeks URL ke knowledge base.",
-        });
-      }
-
-      return;
-    }
-
-    if (action === "delete") {
-      const { scope, consumed } = this.parseKnowledgeScope(args[1], jid);
-      const hasPermission = await this.canWriteKnowledgeScope(scope, user);
-      if (!hasPermission) {
-        await sock.sendMessage(jid, {
-          text: "❌ Anda tidak punya izin untuk menghapus knowledge pada scope group/global.",
-        });
-        return;
-      }
-
-      const scopeContext = this.resolveKnowledgeScopeContext(scope, user, jid);
-      if (scopeContext.error) {
-        await sock.sendMessage(jid, { text: scopeContext.error });
-        return;
-      }
-
-      const sourceId = args
-        .slice(consumed ? 2 : 1)
-        .join(" ")
-        .trim();
-      if (!sourceId) {
-        await sock.sendMessage(jid, {
-          text: `Gunakan: ${BotConfig.prefix}ai kb delete [user|group|global] <sourceId>`,
-        });
-        return;
-      }
-
-      try {
-        const deleted =
-          await this.knowledgeVectorService.deleteKnowledgeBySource({
-            sourceId,
-            scope,
-            ...scopeContext,
-          });
-
-        if (deleted <= 0) {
-          await sock.sendMessage(jid, {
-            text: `Tidak ada data dengan sourceId '${sourceId}' pada scope ${scope}.`,
-          });
-          return;
-        }
-
-        await sock.sendMessage(jid, {
-          text:
-            `✅ Knowledge dihapus.\n` +
-            `• Scope: ${scope}\n` +
-            `• Source ID: ${sourceId}\n` +
-            `• Points terhapus: ${deleted}`,
-        });
-      } catch (error) {
-        log.error("Failed to delete knowledge by source:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat menghapus knowledge.",
-        });
-      }
-
-      return;
-    }
-
-    if (action === "reindex") {
-      const { scope, consumed } = this.parseKnowledgeScope(args[1], jid);
-      const hasPermission = await this.canWriteKnowledgeScope(scope, user);
-      if (!hasPermission) {
-        await sock.sendMessage(jid, {
-          text: "❌ Anda tidak punya izin untuk reindex knowledge pada scope group/global.",
-        });
-        return;
-      }
-
-      const scopeContext = this.resolveKnowledgeScopeContext(scope, user, jid);
-      if (scopeContext.error) {
-        await sock.sendMessage(jid, { text: scopeContext.error });
-        return;
-      }
-
-      const sourceId = args
-        .slice(consumed ? 2 : 1)
-        .join(" ")
-        .trim();
-      if (!sourceId) {
-        await sock.sendMessage(jid, {
-          text: `Gunakan: ${BotConfig.prefix}ai kb reindex [user|group|global] <sourceId>`,
-        });
-        return;
-      }
-
-      try {
-        const updated =
-          await this.knowledgeVectorService.reindexKnowledgeBySource({
-            sourceId,
-            scope,
-            ...scopeContext,
-          });
-
-        if (updated <= 0) {
-          await sock.sendMessage(jid, {
-            text: `Tidak ada data yang direindex untuk sourceId '${sourceId}' pada scope ${scope}.`,
-          });
-          return;
-        }
-
-        await sock.sendMessage(jid, {
-          text:
-            `✅ Reindex selesai.\n` +
-            `• Scope: ${scope}\n` +
-            `• Source ID: ${sourceId}\n` +
-            `• Points direindex: ${updated}`,
-        });
-      } catch (error) {
-        log.error("Failed to reindex knowledge by source:", error);
-        await sock.sendMessage(jid, {
-          text: "Terjadi kesalahan saat reindex knowledge.",
-        });
-      }
-
-      return;
-    }
-
-    await sock.sendMessage(jid, {
-      text:
-        `Subcommand knowledge tidak dikenal: ${action}\n` +
-        `Gunakan: ${BotConfig.prefix}ai kb help`,
-    });
-  }
-
-  private getDefaultKnowledgeScope(jid: string): KnowledgeScope {
-    return jid.endsWith("@g.us") ? "group" : "user";
-  }
-
-  private parseKnowledgeScope(
-    raw: string | undefined,
-    jid: string,
-  ): {
-    scope: KnowledgeScope;
-    consumed: boolean;
-  } {
-    const normalized = raw?.toLowerCase();
-    if (
-      normalized === "user" ||
-      normalized === "group" ||
-      normalized === "global"
-    ) {
-      return { scope: normalized, consumed: true };
-    }
-
-    return {
-      scope: this.getDefaultKnowledgeScope(jid),
-      consumed: false,
-    };
-  }
-
-  private resolveKnowledgeScopeContext(
-    scope: KnowledgeScope,
-    user: string,
-    jid: string,
-  ): {
-    userId?: string;
-    groupId?: string;
-    error?: string;
-  } {
-    if (scope === "user") {
-      return { userId: user };
-    }
-
-    if (scope === "group") {
-      if (!jid.endsWith("@g.us")) {
-        return {
-          error:
-            "Scope group hanya bisa dipakai dari chat grup. Gunakan scope user/global di private chat.",
-        };
-      }
-
-      return { groupId: jid };
-    }
-
-    return {};
-  }
-
-  private async canWriteKnowledgeScope(
-    scope: KnowledgeScope,
-    user: string,
-  ): Promise<boolean> {
-    if (scope === "user") {
-      return true;
-    }
-
-    const roles = await getUserRoles(user);
-    return roles.includes("admin") || roles.includes("moderator");
-  }
-
-  private extractQuotedText(msg: proto.IWebMessageInfo): string | null {
-    const quoted =
-      msg?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-    if (!quoted) {
-      return null;
-    }
-
-    if (quoted.conversation) {
-      return quoted.conversation;
-    }
-
-    if (quoted.extendedTextMessage?.text) {
-      return quoted.extendedTextMessage.text;
-    }
-
-    if (quoted.imageMessage?.caption) {
-      return quoted.imageMessage.caption;
-    }
-
-    return null;
-  }
-
-  private async fetchUrlAsPlainText(
-    url: string,
-  ): Promise<{ title: string | null; text: string }> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-
-    try {
-      const response = await fetch(url, {
-        method: "GET",
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; WhatsApp-Funbot/1.0)",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const html = await response.text();
-      const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
-      const title = titleMatch?.[1]?.replace(/\s+/g, " ").trim() || null;
-
-      const stripped = html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      return {
-        title,
-        text: stripped.slice(0, 20000),
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  private buildDeterministicChatTurnSourceId(
-    user: string,
-    jid: string,
-    prompt: string,
-    msg: proto.IWebMessageInfo,
-  ): string {
-    const scope = jid.endsWith("@g.us") ? "group" : "user";
-    const scopeId = scope === "group" ? jid : user;
-    const messageId = msg?.key?.id?.trim();
-
-    if (messageId) {
-      return `chat_turn:${scope}:${scopeId}:${messageId}`;
-    }
-
-    const normalizedPrompt = prompt.trim().replace(/\s+/g, " ");
-    const timestampPart = JSON.stringify(msg?.messageTimestamp || "");
-    const hashInput = `${scope}|${scopeId}|${timestampPart}|${normalizedPrompt}`;
-    const digest = createHash("sha256")
-      .update(hashInput)
-      .digest("hex")
-      .slice(0, 24);
-
-    return `chat_turn:${scope}:${scopeId}:${digest}`;
   }
 
   private findLatestUserMessageIndex(

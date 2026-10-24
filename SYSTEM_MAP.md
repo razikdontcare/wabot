@@ -64,7 +64,6 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | Path | Purpose | Exports | #layer | #domain |
 | :--- | :--- | :--- | :--- | :--- |
 | `src/domain/services/AIConversationService.ts` | Manages AI chat history and context | `AIConversationService` | #domain | #ai |
-| `src/domain/services/AIKnowledgeVectorService.ts` | Vector search integration for AI knowledge | `AIKnowledgeVectorService` | #domain | #ai |
 | `src/domain/services/AIProviderRouterService.ts` | Routes requests to different AI providers | `AIProviderRouterService` | #domain | #ai |
 | `src/domain/services/AIResponseService.ts` | Generates AI responses | `AIResponseService` | #domain | #ai |
 | `src/domain/services/BotConfigService.ts` | Manages dynamic bot configuration in DB | `BotConfigService` | #domain | #config |
@@ -99,7 +98,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/api.ts` | API entry point and routes | `broadcastQRUpdate` | #infra | #web |
 | `src/shared/logger/logger.ts` | Custom logging with buffer and redaction | `Logger`, `logBuffer` | #shared | #utils |
 | `src/shared/types/types.ts` | Common TypeScript types | `Session`, `WebSocketInfo` | #shared | #types |
-| `src/shared/utils/ai_tools.ts` | Consolidated helper and agent tools for AI interactions (filesystem, command exec, web search, web fetch, knowledge search, web extract) | `setCommandHandler`, `get_bot_commands`, `get_command_help`, `execute_bot_command`, `knowledge_search`, `upsert_knowledge`, `send_chat_message`, `reply_chat_message`, `send_chat_media`, `web_search`, `web_extract`, `list_files`, `read_file`, `write_file`, `delete_file`, `read_memory`, `update_memory`, `exec_command`, `web_fetch` | #shared | #ai |
+| `src/shared/utils/ai_tools.ts` | Consolidated helper and agent tools for AI interactions (filesystem, command exec, web search, web fetch, web extract) | `setCommandHandler`, `get_bot_commands`, `get_command_help`, `execute_bot_command`, `send_chat_message`, `reply_chat_message`, `send_chat_media`, `web_search`, `web_extract`, `list_files`, `read_file`, `write_file`, `delete_file`, `read_memory`, `update_memory`, `exec_command`, `web_fetch` | #shared | #ai |
 | `src/shared/utils/ai_agent_tools.ts` | [DELETED 2026-06-16] Filesystem, execution and web tools for AI agents | N/A | #shared | #ai |
 | `src/shared/utils/whatsapp_formatter.ts` | Formats standard Markdown to WhatsApp-compatible markup | `formatResponseForWhatsApp` | #shared | #utils |
 | `src/shared/utils/ytdlp.ts` | YouTube download utility | `ytdlp` | #shared | #utils |
@@ -182,3 +181,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-09-25** [patch] (agent/zed): Added `docs/SEND_MESSAGE_API.md` client integration guide for the send-message endpoint.
 - **2026-10-24** [minor] (agent/zed): Added `tix` command (`TixCommand` + `TixService`) for TIX cinema listings, showtimes, theaters and catalog summaries via tix.razik.id.
 - **2026-10-24** [patch] (agent/zed): TIX API now requires authentication; `TixService` sends `TIX_API_KEY` in the `x-api-key` header and reports missing/rejected keys with actionable messages.
+- **2026-10-24** [patch] (agent/zed): Removed Qdrant knowledge-base tooling (Auto-RAG, `knowledge_search`/`upsert_knowledge` tools, `!ai kb` commands, `AIKnowledgeVectorService`, QDRANT_* env config) from the AI pipeline.
+- **2026-10-24** [patch] (agent/zed): DeepSeek now handles image input natively; removed the auxiliary Google vision-description pipeline and added vision-aware routing (`requiresMultimodal`) that prefers a vision-capable provider and attaches image parts whenever the routed model supports them. Bumped `@ai-sdk/deepseek` to `^2.0.77`, the first 2.x release that forwards `image_url` parts.

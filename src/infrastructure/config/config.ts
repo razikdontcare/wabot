@@ -25,11 +25,6 @@ function resolveAIProviderPreference(): AIProviderPreference {
   return "deepseek";
 }
 
-function resolveNumberEnv(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 // Default configuration - sensitive data remains in environment variables
 export const BotConfig = {
   // Pengaturan Prefix
@@ -76,13 +71,6 @@ export const BotConfig = {
   aiModelDeepSeek: process.env.AI_MODEL_DEEPSEEK || "deepseek-flash",
   aiMultimodalModelGoogle:
     process.env.AI_MULTIMODAL_MODEL_GOOGLE || "gemma-4-26b-a4b-it",
-  aiEmbeddingModelGoogle:
-    process.env.AI_EMBEDDING_MODEL_GOOGLE || "gemini-embedding-2-preview",
-  qdrantUrl: process.env.QDRANT_URL || "",
-  qdrantApiKey: process.env.QDRANT_API_KEY || "",
-  qdrantCollection: process.env.QDRANT_COLLECTION || "ai_knowledge",
-  aiVectorTopK: resolveNumberEnv(process.env.AI_VECTOR_TOP_K, 5),
-  aiVectorMinScore: resolveNumberEnv(process.env.AI_VECTOR_MIN_SCORE, 0.45),
 
   // Pesan respons
   messages: {
