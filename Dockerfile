@@ -4,8 +4,9 @@ FROM node:24-alpine AS builder
 # Install build dependencies
 RUN apk add --no-cache curl build-base python3 vips-dev bash
 
-# Install Bun
-RUN curl -fsSL https://bun.sh/install | bash \
+# Install Bun (keep in sync with .github/workflows/release.yml)
+ARG BUN_VERSION=bun-v1.3.14
+RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}" \
     && ln -s /root/.bun/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
