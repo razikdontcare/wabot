@@ -4,11 +4,17 @@ import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import {
   BotConfig,
-  getUserRoles,
   log,
   type AIProviderPreference,
 } from "../../infrastructure/config/config.js";
 import { getMongoClient } from "../../infrastructure/config/mongo.js";
+import { getUserRolesConsideringAlt } from "../../shared/utils/userRoles.js";
+import {
+  fetchJoinedGroups,
+  resolveGroup,
+  sendGroupText,
+} from "../../shared/utils/groupDirectory.js";
+import { formatResponseForWhatsApp } from "../../shared/utils/whatsapp_formatter.js";
 import { AIConversationService } from "../../domain/services/AIConversationService.js";
 import { AIResponseService } from "../../domain/services/AIResponseService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
@@ -45,6 +51,13 @@ import type { Logger } from "pino";
 interface AIImageInput {
   dataUrl: string;
   mimeType: string;
+}
+
+interface AICompletionResult {
+  /** Final assistant text (may be empty when the reply was sent via a tool). */
+  text: string;
+  /** Texts that were actually delivered to the chat during this turn. */
+  sentTexts: string[];
 }
 
 export class AskAICommand extends CommandInterface {
@@ -232,7 +245,7 @@ export class AskAICommand extends CommandInterface {
         log.error("Failed to load user profile graph:", error);
       }
 
-      const response = await this.getAICompletion(
+      const completion = await this.getAICompletion(
         history,
         user,
         userPushName,
@@ -246,10 +259,21 @@ export class AskAICommand extends CommandInterface {
         profileGraphContext,
       );
 
-      // Keep the assistant turn in memory only when there is actual text output.
-      // User-facing responses should be sent through reply_message/send_message tools.
-      if (response.trim()) {
-        await this.conversationService.addMessage(user, "assistant", response);
+      // Persist the assistant turn from the text the user actually received.
+      // Replies delivered through reply_message/send_message never appear in
+      // the final model text, which previously made the bot forget its own
+      // answers on the next turn.
+      const assistantReply =
+        completion.sentTexts.length > 0
+          ? completion.sentTexts.join("\n\n")
+          : completion.text;
+
+      if (assistantReply.trim()) {
+        await this.conversationService.addMessage(
+          user,
+          "assistant",
+          assistantReply.trim(),
+        );
 
         // Save response to group context if this is a group chat
         if (isGroupChat) {
@@ -258,7 +282,7 @@ export class AskAICommand extends CommandInterface {
             user,
             userPushName || undefined,
             prompt,
-            response,
+            assistantReply.trim(),
           );
         }
       }
@@ -284,12 +308,22 @@ export class AskAICommand extends CommandInterface {
     userProviderPreference?: AIProviderPreference | null,
     userPersonalityPreference?: AIPersonality | null,
     profileGraphContext?: string,
-  ): Promise<string> {
+  ): Promise<AICompletionResult> {
     let statusMsgKey: proto.IMessageKey | undefined;
+    const sentTexts: string[] = [];
+
+    const recordSentText = (text?: string | null) => {
+      const clean = text?.trim();
+      if (!clean) return;
+      if (sentTexts[sentTexts.length - 1] === clean) return;
+      sentTexts.push(clean);
+    };
+
     try {
       const activePersonality = userPersonalityPreference || "nexa";
       const isGroupChat = Boolean(jid?.endsWith("@g.us"));
-      const userRoles = await getUserRoles(user);
+      const userRoles = await getUserRolesConsideringAlt(user, msg);
+      const isPrivilegedUser = userRoles.includes("admin");
       const knownUserContextInstruction = this.buildKnownUserContextInstruction(
         userPushName,
         activePersonality,
@@ -309,6 +343,7 @@ export class AskAICommand extends CommandInterface {
       const base_prompt = loadPersonalityPrompt(activePersonality, {
         groupContext,
         currentDate: new Date().toString(),
+        privileged: isPrivilegedUser,
         additionalInstructions: [
           knownUserContextInstruction,
           runtimeUserContextInstruction,
@@ -501,12 +536,15 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           inputSchema: z.object({
             text: z.string().min(1),
           }),
-          execute: async ({ text }) =>
-            send_chat_message(text, {
+          execute: async ({ text }) => {
+            const result = await send_chat_message(text, {
               jid: jid!,
               sock: sock!,
               msg: msg!,
-            }),
+            });
+            recordSentText(text);
+            return result;
+          },
         }),
         reply_message: createTool({
           description:
@@ -514,12 +552,15 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           inputSchema: z.object({
             text: z.string().min(1),
           }),
-          execute: async ({ text }) =>
-            reply_chat_message(text, {
+          execute: async ({ text }) => {
+            const result = await reply_chat_message(text, {
               jid: jid!,
               sock: sock!,
               msg: msg!,
-            }),
+            });
+            recordSentText(text);
+            return result;
+          },
         }),
         send_media: createTool({
           description:
@@ -537,12 +578,15 @@ You have identified a research-heavy request. Follow these steps for maximum acc
             .refine((value) => Boolean(value.url || value.dataUrl), {
               message: "Either url or dataUrl must be provided.",
             }),
-          execute: async (input) =>
-            send_chat_media(input, {
+          execute: async (input) => {
+            const result = await send_chat_media(input, {
               jid: jid!,
               sock: sock!,
               msg: msg!,
-            }),
+            });
+            recordSentText(input.caption);
+            return result;
+          },
         }),
         get_bot_commands: createTool({
           description:
@@ -565,55 +609,162 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           inputSchema: z.object({}),
           execute: async () => new Date().toString(),
         }),
-        list_files: createTool({
-          description: "List files in a directory",
-          inputSchema: z.object({
-            path: z.string().optional().default("."),
-          }),
-          execute: async ({ path }) => list_files(path),
-        }),
-        read_file: createTool({
-          description: "Read the content of a file",
-          inputSchema: z.object({
-            path: z.string(),
-          }),
-          execute: async ({ path }) => read_file(path),
-        }),
-        write_file: createTool({
-          description: "Write content to a file (overwrites if exists)",
-          inputSchema: z.object({
-            path: z.string(),
-            content: z.string(),
-          }),
-          execute: async ({ path, content }) => write_file(path, content),
-        }),
-        delete_file: createTool({
-          description: "Delete a file",
-          inputSchema: z.object({
-            path: z.string(),
-          }),
-          execute: async ({ path }) => delete_file(path),
-        }),
-        update_memory: createTool({
-          description: "Update persistent memory in MEMORY.md",
-          inputSchema: z.object({
-            content: z.string(),
-            mode: z.enum(["append", "overwrite"]).optional().default("append"),
-          }),
-          execute: async ({ content, mode }) => update_memory(content, mode),
-        }),
-        read_memory: createTool({
-          description: "Read the entire content of MEMORY.md",
-          inputSchema: z.object({}),
-          execute: async () => read_memory(),
-        }),
-        exec_command: createTool({
-          description: "Execute a shell command in the bot's workspace",
-          inputSchema: z.object({
-            command: z.string(),
-          }),
-          execute: async ({ command }) => exec_command(command),
-        }),
+        // Admin-only tools: filesystem, shell, and the shared MEMORY.md.
+        // Non-admins get none of them, so a prompt-injected message cannot
+        // read secrets or execute commands on the bot host.
+        ...(isPrivilegedUser
+          ? {
+              list_files: createTool({
+                description: "List files in a directory",
+                inputSchema: z.object({
+                  path: z.string().optional().default("."),
+                }),
+                execute: async ({ path }) => list_files(path),
+              }),
+              read_file: createTool({
+                description: "Read the content of a file",
+                inputSchema: z.object({
+                  path: z.string(),
+                }),
+                execute: async ({ path }) => read_file(path),
+              }),
+              write_file: createTool({
+                description: "Write content to a file (overwrites if exists)",
+                inputSchema: z.object({
+                  path: z.string(),
+                  content: z.string(),
+                }),
+                execute: async ({ path, content }) => write_file(path, content),
+              }),
+              delete_file: createTool({
+                description: "Delete a file",
+                inputSchema: z.object({
+                  path: z.string(),
+                }),
+                execute: async ({ path }) => delete_file(path),
+              }),
+              update_memory: createTool({
+                description: "Update persistent memory in MEMORY.md",
+                inputSchema: z.object({
+                  content: z.string(),
+                  mode: z
+                    .enum(["append", "overwrite"])
+                    .optional()
+                    .default("append"),
+                }),
+                execute: async ({ content, mode }) =>
+                  update_memory(content, mode),
+              }),
+              read_memory: createTool({
+                description: "Read the entire content of MEMORY.md",
+                inputSchema: z.object({}),
+                execute: async () => read_memory(),
+              }),
+              exec_command: createTool({
+                description: "Execute a shell command in the bot's workspace",
+                inputSchema: z.object({
+                  command: z.string(),
+                }),
+                execute: async ({ command }) => exec_command(command),
+              }),
+              list_groups: createTool({
+                description:
+                  "List the WhatsApp groups this bot has joined (name, JID, member count, admin-only posting). Admin only. Use this before sending an announcement when the group name is unclear.",
+                inputSchema: z.object({
+                  refresh: z.boolean().optional().default(false),
+                }),
+                execute: async ({ refresh }) => {
+                  if (!sock) return "Status: FAILED\nError: socket belum siap.";
+
+                  try {
+                    const groups = await fetchJoinedGroups(sock, {
+                      forceRefresh: refresh,
+                    });
+
+                    if (groups.length === 0) {
+                      return "Bot belum bergabung di grup mana pun.";
+                    }
+
+                    const lines = groups.map(
+                      (group, index) =>
+                        `${index + 1}. ${group.subject} · ${group.participants} anggota${
+                          group.announce ? " · hanya admin" : ""
+                        }\n   JID: ${group.jid}`,
+                    );
+
+                    return `Total ${groups.length} grup:\n\n${lines.join("\n")}`;
+                  } catch (error) {
+                    log.error("Failed to list joined groups:", error);
+                    return `Status: FAILED\nError: gagal mengambil daftar grup (${
+                      error instanceof Error ? error.message : String(error)
+                    }).`;
+                  }
+                },
+              }),
+              send_group_message: createTool({
+                description:
+                  "Send a text message or announcement to one of the WhatsApp groups the bot has joined. Admin only. Call list_groups first if the group name is ambiguous. Set dryRun=true to preview the resolved group and message without sending.",
+                inputSchema: z.object({
+                  group: z
+                    .string()
+                    .min(1)
+                    .describe(
+                      "Group JID (e.g. 1203630...@g.us) or (part of) the group name",
+                    ),
+                  text: z.string().min(1).max(4000),
+                  dryRun: z.boolean().optional().default(false),
+                }),
+                execute: async ({ group, text, dryRun }) => {
+                  if (!sock) return "Status: FAILED\nError: socket belum siap.";
+
+                  try {
+                    const groups = await fetchJoinedGroups(sock);
+                    const resolution = resolveGroup(groups, group);
+
+                    if (resolution.status === "ambiguous") {
+                      return `Status: FAILED\nError: nama grup "${group}" ambigu. Kandidat:\n${resolution.candidates
+                        .map((item) => `- ${item.subject} (${item.jid})`)
+                        .join("\n")}\nMinta admin memilih salah satu JID di atas.`;
+                    }
+
+                    if (resolution.status === "not_found") {
+                      const suggestions =
+                        resolution.suggestions.length > 0
+                          ? `\nMungkin maksudnya:\n${resolution.suggestions
+                              .map((item) => `- ${item.subject} (${item.jid})`)
+                              .join("\n")}`
+                          : "";
+                      return `Status: FAILED\nError: grup "${group}" tidak ditemukan di daftar grup bot.${suggestions}`;
+                    }
+
+                    const target = resolution.group;
+                    const formatted = formatResponseForWhatsApp(text);
+
+                    if (dryRun) {
+                      return `Status: PREVIEW (belum dikirim)\nGroup: ${target.subject}\nJID: ${target.jid}\nMessage:\n${formatted}`;
+                    }
+
+                    const messageId = await sendGroupText(
+                      sock,
+                      target.jid,
+                      formatted,
+                    );
+
+                    log.info(
+                      `AI sent a group message to ${target.jid} (${target.subject}) as ${user}`,
+                    );
+
+                    return `Status: SENT\nGroup: ${target.subject}\nJID: ${target.jid}\nMessage ID: ${messageId || "-"}`;
+                  } catch (error) {
+                    log.error("Failed to send group message:", error);
+                    return `Status: FAILED\nError: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`;
+                  }
+                },
+              }),
+            }
+          : {}),
         web_fetch: createTool({
           description: "Fetch content from a URL",
           inputSchema: z.object({
@@ -635,7 +786,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
           ? {
               execute_bot_command: createTool({
                 description:
-                  "Execute a bot command with given arguments. Use this when the user wants to perform an action that requires running a bot command.",
+                  "Execute a bot command with given arguments. The result reports whether the command succeeded (Status) and includes the messages it already sent to the chat. Check Status before telling the user the action worked.",
                 inputSchema: z.object({
                   commandName: z.string().min(1),
                   args: z.array(z.string()),
@@ -677,6 +828,8 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         update_memory: "🧠",
         read_memory: "📖",
         exec_command: "💻",
+        list_groups: "👥",
+        send_group_message: "📢",
         web_fetch: "🌐",
         execute_bot_command: "⚙️",
       };
@@ -731,6 +884,7 @@ You have identified a research-heavy request. Follow these steps for maximum acc
                 } else {
                   await sock.sendMessage(jid, { text: text.trim() });
                 }
+                recordSentText(text);
               }
             }
           }
@@ -746,10 +900,14 @@ You have identified a research-heavy request. Follow these steps for maximum acc
             sock,
             msg,
           });
+          recordSentText(fallbackResponse);
         }
       }
 
-      return result.text || "Tidak ada jawaban yang diberikan oleh AI.";
+      return {
+        text: result.text?.trim() ?? "",
+        sentTexts,
+      };
     } catch (error) {
       console.error("Error fetching AI completion:", error);
 
@@ -762,11 +920,12 @@ You have identified a research-heavy request. Follow these steps for maximum acc
         } else if (jid && sock) {
           await sock.sendMessage(jid, { text: userFacing });
         }
+        recordSentText(userFacing);
       } catch (sendErr) {
         log.error("Failed to notify user about AI provider error:", sendErr);
       }
 
-      return "";
+      return { text: "", sentTexts };
     }
   }
 
