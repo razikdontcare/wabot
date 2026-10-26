@@ -9,6 +9,120 @@ import { log } from "../../infrastructure/config/config.js";
 
 const STICKER_SIZE = 512;
 
+const RIFF_HEADER_SIZE = 12;
+const ANMF_HEADER_SIZE = 16;
+const VP8X_FLAG_ALPHA = 0x10;
+const ANIM_BACKGROUND_SIZE = 4;
+
+interface RiffChunk {
+  fourCC: string;
+  payloadOffset: number;
+  size: number;
+}
+
+function parseRiffChunks(data: Buffer): RiffChunk[] | null {
+  if (
+    data.length < RIFF_HEADER_SIZE ||
+    data.toString("ascii", 0, 4) !== "RIFF" ||
+    data.toString("ascii", 8, 12) !== "WEBP"
+  ) {
+    return null;
+  }
+
+  const chunks: RiffChunk[] = [];
+  let offset = RIFF_HEADER_SIZE;
+
+  while (offset + 8 <= data.length) {
+    const fourCC = data.toString("ascii", offset, offset + 4);
+    const size = data.readUInt32LE(offset + 4);
+    const payloadOffset = offset + 8;
+
+    // Truncated or malformed container: stop instead of guessing.
+    if (payloadOffset + size > data.length) {
+      return null;
+    }
+
+    chunks.push({ fourCC, payloadOffset, size });
+    offset = payloadOffset + size + (size % 2);
+  }
+
+  return chunks;
+}
+
+/** VP8L bitstream: alpha_is_used is bit 28 of the 32-bit header. */
+function vp8lHasAlpha(data: Buffer, payloadOffset: number): boolean {
+  return (
+    payloadOffset + 5 <= data.length && (data[payloadOffset + 4] & 0x10) !== 0
+  );
+}
+
+function animatedFrameHasAlpha(
+  data: Buffer,
+  payloadOffset: number,
+  size: number,
+): boolean {
+  const end = payloadOffset + size;
+  let offset = payloadOffset + ANMF_HEADER_SIZE;
+
+  while (offset + 8 <= end) {
+    const fourCC = data.toString("ascii", offset, offset + 4);
+    const subSize = data.readUInt32LE(offset + 4);
+    const subPayload = offset + 8;
+
+    if (subPayload + subSize > end) return false;
+    if (fourCC === "ALPH") return true;
+    if (fourCC === "VP8L" && vp8lHasAlpha(data, subPayload)) return true;
+
+    offset = subPayload + subSize + (subSize % 2);
+  }
+
+  return false;
+}
+
+/**
+ * Keep the WebP container flags in sync with the actual pixel data.
+ *
+ * WhatsApp Web (Chromium's WebP decoder) trusts the VP8X flags, while the
+ * mobile apps decode the frame payloads directly. Two things therefore need
+ * fixing for the animated stickers this bot produces:
+ *
+ * 1. `node-webpmux` re-writes the animation without the VP8X alpha flag
+ *    because the alpha lives inside the ANMF frames, not in a top-level ALPH
+ *    chunk. Chromium then decodes every frame as opaque, which produces white
+ *    blocks inside the sticker on WhatsApp Web.
+ * 2. ffmpeg writes an opaque white ANIM background colour. Decoders that
+ *    honour it fill the canvas with white, so transparent areas (padding and
+ *    holes in the artwork) turn into white squares on WhatsApp Web.
+ */
+export function normalizeStickerWebp(input: Uint8Array): Uint8Array {
+  const data = Buffer.from(input);
+  const chunks = parseRiffChunks(data);
+  if (!chunks) return input;
+
+  const vp8x = chunks.find(({ fourCC }) => fourCC === "VP8X");
+  if (!vp8x || vp8x.size < 10) return input;
+
+  const hasAlpha = chunks.some(({ fourCC, payloadOffset, size }) => {
+    if (fourCC === "ALPH") return true;
+    if (fourCC === "VP8L") return vp8lHasAlpha(data, payloadOffset);
+    if (fourCC === "ANMF") {
+      return animatedFrameHasAlpha(data, payloadOffset, size);
+    }
+    return false;
+  });
+
+  if (hasAlpha) {
+    data[vp8x.payloadOffset] |= VP8X_FLAG_ALPHA;
+  }
+
+  const anim = chunks.find(({ fourCC }) => fourCC === "ANIM");
+  if (anim && anim.size >= ANIM_BACKGROUND_SIZE) {
+    data.fill(0, anim.payloadOffset, anim.payloadOffset + ANIM_BACKGROUND_SIZE);
+  }
+
+  return data;
+}
+
 /**
  * Add EXIF metadata to WebP buffer for WhatsApp Sticker packname and authorname.
  */
@@ -39,10 +153,12 @@ export async function addExif(
     img.exif = exif;
 
     const result = await img.save(null);
-    return new Uint8Array(result);
+    // Re-muxing drops the VP8X alpha flag of animations, restore it before
+    // the sticker is sent (WhatsApp Web needs it to keep transparency).
+    return normalizeStickerWebp(new Uint8Array(result));
   } catch (error) {
     log.warn("Failed to add EXIF to sticker:", error);
-    return webpBuffer; // Return original if failed
+    return normalizeStickerWebp(webpBuffer); // Return original if failed
   }
 }
 
@@ -174,7 +290,7 @@ export async function createAnimatedSticker(
     ]);
 
     const result = await fs.readFile(outputPath);
-    return new Uint8Array(result);
+    return normalizeStickerWebp(new Uint8Array(result));
   } finally {
     await Promise.allSettled([
       fs.unlink(inputPath).catch(() => {}),

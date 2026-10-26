@@ -27,6 +27,7 @@ import {
   type WAMessage,
 } from "baileys";
 import { CommandInfo } from "../../app/handlers/CommandInterface.js";
+import type { CapturedCommandMessage } from "./commandCapture.js";
 
 // Restrict filesystem access to the current directory for safety
 const ROOT_DIR = process.cwd() + "/workspaces/";
@@ -751,6 +752,60 @@ export async function get_command_help(commandName: string): Promise<string> {
   }
 }
 
+const MAX_COMMAND_MESSAGE_LENGTH = 500;
+const MAX_COMMAND_RESULT_LENGTH = 1800;
+
+function truncateForTool(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+function describeCapturedMessage(message: CapturedCommandMessage): string {
+  const body = (message.text ?? message.caption ?? "").trim();
+  const label = message.kind === "text" ? "text" : message.kind;
+  return body
+    ? `[${label}] ${truncateForTool(body, MAX_COMMAND_MESSAGE_LENGTH)}`
+    : `[${label}] (no text)`;
+}
+
+function formatCommandResult(
+  commandName: string,
+  result: {
+    success: boolean;
+    error?: string;
+    output?: CapturedCommandMessage[];
+  },
+): string {
+  const lines = [
+    `Command: ${commandName}`,
+    `Status: ${result.success ? "SUCCESS" : "FAILED"}`,
+  ];
+
+  if (!result.success && result.error) {
+    lines.push(
+      `Error: ${truncateForTool(result.error.trim(), MAX_COMMAND_MESSAGE_LENGTH)}`,
+    );
+  }
+
+  const output = result.output ?? [];
+  if (output.length > 0) {
+    lines.push("Messages already sent to the chat:");
+    output.forEach((message, index) => {
+      lines.push(`${index + 1}. ${describeCapturedMessage(message)}`);
+    });
+  } else {
+    lines.push("Messages already sent to the chat: (none)");
+  }
+
+  if (!result.success) {
+    lines.push(
+      "The command FAILED. Do not tell the user it succeeded; explain the error above (or retry with corrected arguments) and only then confirm the result.",
+    );
+  }
+
+  return truncateForTool(lines.join("\n"), MAX_COMMAND_RESULT_LENGTH);
+}
+
 export async function execute_bot_command(
   commandName: string,
   args: string[],
@@ -778,16 +833,12 @@ export async function execute_bot_command(
       msg,
     );
 
-    if (result.success) {
-      return (
-        result.message || `Command '${commandName}' executed successfully.`
-      );
-    } else {
-      return `Failed to execute command '${commandName}': ${result.error}`;
-    }
+    return formatCommandResult(commandName, result);
   } catch (error) {
     log.error("Error executing bot command:", error);
-    return `Error executing command '${commandName}': ${error instanceof Error ? error.message : "Unknown error"}`;
+    return `Command: ${commandName}\nStatus: FAILED\nError: ${
+      error instanceof Error ? error.message : "Unknown error"
+    }`;
   }
 }
 

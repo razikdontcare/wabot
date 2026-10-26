@@ -10,18 +10,12 @@ import { VIPService } from "../../domain/services/VIPService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
-import sharp from "sharp";
-import { spawn } from "child_process";
-import { promises as fs } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
-import { randomUUID } from "crypto";
 import extractUrlsFromText from "../../shared/utils/extractUrlsFromText.js";
 import {
   createFetchClient,
   isFetchError,
 } from "../../shared/utils/fetchClient.js";
-import webpmux from "node-webpmux";
 import { WorkerPool } from "../../shared/utils/WorkerPool.js";
 import type { Logger } from "pino";
 
@@ -30,11 +24,6 @@ interface MediaData {
   buffer: Buffer;
   mediaType: "image" | "video";
   sourceExtension: string;
-}
-
-interface DetectedMediaInfo {
-  mediaType: "image" | "video";
-  extension: string;
 }
 
 export class StickerCommand extends CommandInterface {
@@ -299,17 +288,8 @@ export class StickerCommand extends CommandInterface {
         customAuthor = authorMatch[1].replace(/['"]/g, "");
       }
 
-      // Filter out parsed flags from args for cleaner extraction
-      const cleanArgs = args.filter((arg, i) => {
-        if (arg === "--pack" || arg === "--author") return false;
-        if (i > 0 && (args[i - 1] === "--pack" || args[i - 1] === "--author"))
-          return false;
-        // if the arg was grouped in quotes it might be split across indices, but args.filter isn't perfect for quoted strings.
-        // We'll rely on the existing logic and strip out matches from fullArgs string later if needed.
-        return true;
-      });
-
-      // Instead of trying to patch args array flawlessly, let's just replace the raw matches in fullArgs
+      // Strip the pack/author/crop flags from the raw command text so only
+      // the actual media source (URL or search keywords) is left behind.
       const cleanCommandText = fullArgs
         .replace(/--pack\s+([^'"\s]+|'[^']+'|"[^"]+")/g, "")
         .replace(/--author\s+([^'"\s]+|'[^']+'|"[^"]+")/g, "")
@@ -630,9 +610,13 @@ export class StickerCommand extends CommandInterface {
           ],
         );
 
-        // Send sticker
+        // Send sticker.
+        // `isAnimated` must be set explicitly: Baileys does not derive it from
+        // the file, and WhatsApp Web uses it to pick the animated sticker
+        // renderer instead of showing a still frame.
         await sock.sendMessage(jid, {
           sticker: Buffer.from(exifResult),
+          isAnimated: mediaType === "video",
         });
 
         log.info(`Sticker created for user ${user} in ${jid}`);

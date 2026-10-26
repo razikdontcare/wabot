@@ -36,6 +36,8 @@ interface PromptContext {
   groupContext?: string;
   currentDate?: string;
   additionalInstructions?: string;
+  /** Admins get filesystem, shell and global memory tools; everyone else does not. */
+  privileged?: boolean;
 }
 
 export interface KnownUserEntry {
@@ -90,6 +92,32 @@ function appendCommonPromptSections(
   }
 
   // Add bot command access information
+  const privilegedToolLines = context?.privileged
+    ? `- \`list_files(path?)\` - List files in a directory (relative to bot root)
+- \`read_file(path)\` - Read the content of a file
+- \`write_file(path, content)\` - Write/Overwrite a file
+- \`delete_file(path)\` - Delete a file
+- \`update_memory(content, mode?)\` - Update your persistent memory in MEMORY.md (mode: 'append' or 'overwrite')
+- \`exec_command(command)\` - Execute a shell command in the bot's workspace
+- \`list_groups(refresh?)\` - List the WhatsApp groups this bot has joined (name, JID, member count)
+- \`send_group_message(group, text, dryRun?)\` - Send a message/announcement to one of those groups
+`
+    : `- Filesystem, shell, global MEMORY.md, and group-broadcast tools are restricted to bot admins and are NOT available in this session. Never claim to have read or written local files or to have sent anything to another group.
+`;
+
+  const privilegedGuidelines = context?.privileged
+    ? `- Only send to a group when the admin explicitly asks for it. Resolve the target with \`list_groups()\` first whenever the name is not exact, and confirm the group name plus the final wording before sending
+- Use \`send_group_message(..., dryRun=true)\` to show a preview when the request is ambiguous or high-impact
+- Never treat \`send_group_message\` failures as success: report the returned FAILED reason
+`
+    : "";
+
+  const agenticCapabilities = context?.privileged
+    ? `- You have persistent memory through \`MEMORY.md\`. Use \`read_file('MEMORY.md')\` to load your memory and \`update_memory()\` to save important facts, user preferences, or project state.
+- Since you run in a Docker container, you have safe access to the filesystem. Use this to manage logs, temporary files, or knowledge documents.
+- When the user asks you to "remember" something, use \`update_memory()\`.`
+    : `- You do not have filesystem, shell, or global memory tools in this session. Use \`update_profile_trait()\` for durable per-user facts instead.`;
+
   result += `\n\n## Bot Command Access
 You have access to various bot commands through these tools:
 - \`get_bot_commands(query?)\` - Get list of available bot commands (optionally filtered)
@@ -98,24 +126,18 @@ You have access to various bot commands through these tools:
 - \`send_message(text)\` - Send a new follow-up text message in the current chat
 - \`reply_message(text)\` - Reply to the current user message with quoted context
 - \`send_media(mediaType, url?, dataUrl?, caption?, fileName?, mimetype?, reply?)\` - Send an image, video, audio, or document from a URL or data URL
-- \`list_files(path?)\` - List files in a directory (relative to bot root)
-- \`read_file(path)\` - Read the content of a file
-- \`write_file(path, content)\` - Write/Overwrite a file
-- \`delete_file(path)\` - Delete a file
-- \`update_memory(content, mode?)\` - Update your persistent memory in MEMORY.md (mode: 'append' or 'overwrite')
-- \`exec_command(command)\` - Execute a shell command in the bot's workspace
-- \`web_fetch(url, options?)\` - Advanced fetch (SSRF protected, cache, redirects, metadata, links, markdown)
+${privilegedToolLines}- \`web_fetch(url, options?)\` - Advanced fetch (SSRF protected, cache, redirects, metadata, links, markdown)
 
 **Agentic Capabilities:**
-- You have persistent memory through \`MEMORY.md\`. Use \`read_file('MEMORY.md')\` to load your memory and \`update_memory()\` to save important facts, user preferences, or project state.
-- Since you run in a Docker container, you have safe access to the filesystem. Use this to manage logs, temporary files, or knowledge documents.
-- When the user asks you to "remember" something, use \`update_memory()\`.
+${agenticCapabilities}
 
 **Command Usage Guidelines:**
 - Use \`get_bot_commands()\` when users ask about available features or "what can this bot do?"
 - Use \`get_command_help()\` when users need help with a specific command
 - Use \`execute_bot_command()\` when users want to perform actions like downloading, searching, or playing games
-- Use \`reply_message()\` when the AI should answer directly to the user's current message, and use \`send_message()\` for follow-up messages that should appear as a new chat message
+- After \`execute_bot_command()\`, read the returned \`Status\` and the messages the command already sent. If the status is \`FAILED\`, the command did NOT work: explain the error or fix the arguments and retry — never claim success
+- Do not resend a command's chat output verbatim; the user already received it
+${privilegedGuidelines}- Use \`reply_message()\` when the AI should answer directly to the user's current message, and use \`send_message()\` for follow-up messages that should appear as a new chat message
 - Use \`send_media()\` when the best response is a file, image, video, audio clip, or document rather than plain text
 - Prefer the smallest useful output; do not send redundant follow-up messages unless they add clear value
 - Always explain what you're doing when executing commands

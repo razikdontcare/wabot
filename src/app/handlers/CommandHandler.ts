@@ -3,11 +3,19 @@ import { SessionService } from "../../domain/services/SessionService.js";
 import { CommandUsageService } from "../../domain/services/CommandUsageService.js";
 import {
   getCurrentConfig,
-  getUserRoles,
   log,
 } from "../../infrastructure/config/config.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { CooldownManager } from "./CooldownManager.js";
+import {
+  classifyCommandOutcome,
+  createCommandCapture,
+  type CapturedCommandMessage,
+} from "../../shared/utils/commandCapture.js";
+import {
+  getUserRolesConsideringAlt,
+  isAdminConsideringAlt,
+} from "../../shared/utils/userRoles.js";
 import { proto } from "baileys";
 import os from "os";
 
@@ -320,13 +328,17 @@ export class CommandHandler {
     return info !== undefined && !info.disabled;
   }
 
-  async canUserExecuteCommand(name: string, user: string): Promise<boolean> {
+  async canUserExecuteCommand(
+    name: string,
+    user: string,
+    msg?: proto.IWebMessageInfo,
+  ): Promise<boolean> {
     const info = this.getCommandInfo(name);
     if (!info || info.disabled) return false;
 
     // Check permissions
     if (info.requiredRoles && info.requiredRoles.length > 0) {
-      const userRoles = await getUserRoles(user);
+      const userRoles = await getUserRolesConsideringAlt(user, msg);
       const hasRole = info.requiredRoles.some((role) =>
         userRoles.includes(role),
       );
@@ -343,7 +355,12 @@ export class CommandHandler {
     user: string,
     sock: WebSocketInfo,
     msg: proto.IWebMessageInfo,
-  ): Promise<{ success: boolean; message?: string; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    message?: string;
+    error?: string;
+    output?: CapturedCommandMessage[];
+  }> {
     try {
       const info = this.getCommandInfo(commandName);
       if (!info) {
@@ -358,7 +375,7 @@ export class CommandHandler {
       }
 
       // Check permissions
-      if (!(await this.canUserExecuteCommand(commandName, user))) {
+      if (!(await this.canUserExecuteCommand(commandName, user, msg))) {
         return {
           success: false,
           error: `You don't have permission to use '${commandName}'`,
@@ -413,20 +430,36 @@ export class CommandHandler {
         await this.usageService.increment(info.name, user);
       }
 
-      // Execute the command
+      // Execute the command. The socket is proxied so the AI can see the
+      // messages the command sends (and whether it reported a failure) instead
+      // of assuming success just because no exception was thrown.
+      const capture = createCommandCapture(sock);
       const commandInstance = this.getCommandInstance(commandName);
       await commandInstance.handleCommand(
         args,
         jid,
         user,
-        sock,
+        capture.socket,
         this.sessionService,
         msg,
       );
 
+      const outcome = classifyCommandOutcome(capture.messages);
+      if (!outcome.success) {
+        log.warn(
+          `Command '${commandName}' reported a handled failure: ${outcome.error}`,
+        );
+        return {
+          success: false,
+          error: outcome.error ?? `Command '${commandName}' failed`,
+          output: capture.messages,
+        };
+      }
+
       return {
         success: true,
         message: `Command '${commandName}' executed successfully`,
+        output: capture.messages,
       };
     } catch (error) {
       log.error(`Error executing command '${commandName}' for AI:`, error);
@@ -507,43 +540,18 @@ export class CommandHandler {
   }
 
   // Resolve effective IDs for a user considering LID<->PN alt fields in the message key
-  private getEffectiveUserIds(
-    user: string,
-    msg: proto.IWebMessageInfo,
-  ): string[] {
-    const ids = new Set<string>();
-    if (user) ids.add(user);
-    // Baileys v7 adds participantAlt/remoteJidAlt on the WAMessageKey shape (not in proto types)
-    const keyAny = (
-      msg as unknown as {
-        key?: { participantAlt?: string; remoteJidAlt?: string };
-      }
-    ).key;
-    const alt = keyAny?.participantAlt || keyAny?.remoteJidAlt;
-    if (alt) ids.add(alt);
-    return Array.from(ids);
-  }
-
   private async isAdminConsideringAlt(
     user: string,
     msg: proto.IWebMessageInfo,
   ): Promise<boolean> {
-    const config = await getCurrentConfig();
-    const ids = this.getEffectiveUserIds(user, msg);
-    return ids.some((id) => config.admins.includes(id));
+    return isAdminConsideringAlt(user, msg);
   }
 
   private async getUserRolesConsideringAlt(
     user: string,
     msg: proto.IWebMessageInfo,
   ): Promise<string[]> {
-    const ids = this.getEffectiveUserIds(user, msg);
-    const roleSets = await Promise.all(ids.map((id) => getUserRoles(id)));
-    const merged = new Set<string>();
-    for (const roles of roleSets) {
-      for (const r of roles) merged.add(r);
-    }
-    return Array.from(merged);
+    return getUserRolesConsideringAlt(user, msg);
   }
 
   private async handleGameCommand(
