@@ -30,7 +30,13 @@ jobs:
           node-version: "20"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        # v1 resolves/downloads through bun.sh/download, which can answer 403
+        # for GitHub runners (Cloudflare/rate limiting). v2 downloads the
+        # release asset from github.com, and pinning the version skips tag
+        # resolution entirely (no GitHub API call).
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install
