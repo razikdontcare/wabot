@@ -156,8 +156,8 @@ Additional validation behaviour:
 
 - Creating a name or alias that collides with any existing command name/alias, a core command,
   or with another alias in the same request fails with `409`.
-- `PATCH` bodies are strict: renaming (`name`), or sending unknown fields, fails with `400`
-  instead of being silently ignored. (`POST` strips unknown fields.)
+- `POST` and `PATCH` bodies are strict: renaming (`name`) or sending unknown fields fails with
+  `400` instead of being silently ignored.
 - The name is immutable — delete + recreate a custom command to rename it.
 - Custom commands support `enabled`, `cooldown`, `maxUses`, `vipOnly` and `requiredRoles`;
   they do **not** support `disabledReason` (that field exists only for built-in overrides).
