@@ -168,7 +168,9 @@ export function registerCommandRoutes(
       const registry = await getRegistry();
       const name = c.req.param("name").toLowerCase();
       const current = registry.getSync(name);
-      if (!current) return notFound(c, name);
+      // Mutations must address the canonical name: aliases are read-only, so
+      // an alias resolves to a command whose name differs from the URL segment.
+      if (!current || current.name !== name) return notFound(c, name);
 
       const body = await readJsonBody(c);
       if (body === undefined) return invalidJson(c);
@@ -196,7 +198,9 @@ export function registerCommandRoutes(
       const registry = await getRegistry();
       const name = c.req.param("name").toLowerCase();
       const current = registry.getSync(name);
-      if (!current) return notFound(c, name);
+      // Mutations must address the canonical name: aliases are read-only, so
+      // an alias resolves to a command whose name differs from the URL segment.
+      if (!current || current.name !== name) return notFound(c, name);
 
       if (current.source === "builtin") {
         return c.json(
@@ -219,7 +223,9 @@ export function registerCommandRoutes(
       const registry = await getRegistry();
       const name = c.req.param("name").toLowerCase();
       const current = registry.getSync(name);
-      if (!current) return notFound(c, name);
+      // Mutations must address the canonical name: aliases are read-only, so
+      // an alias resolves to a command whose name differs from the URL segment.
+      if (!current || current.name !== name) return notFound(c, name);
 
       if (current.source === "custom") {
         return c.json(

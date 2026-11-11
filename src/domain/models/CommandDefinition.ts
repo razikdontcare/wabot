@@ -30,19 +30,21 @@ const commandNameSchema = z
  * A data-only command created from the admin console. Response text is a
  * `{{placeholder}}` template rendered by `renderCommandTemplate`.
  */
-export const createCustomCommandSchema = z.object({
-  name: commandNameSchema,
-  aliases: z.array(commandNameSchema).max(5).default([]),
-  description: z.string().trim().min(1).max(200),
-  helpText: z.string().trim().max(2000).optional(),
-  response: z.string().min(1).max(MAX_COMMAND_RESPONSE_LENGTH),
-  category: z.enum(CUSTOM_COMMAND_CATEGORIES).default("general"),
-  enabled: z.boolean().default(true),
-  cooldown: z.number().int().min(0).max(86_400_000).optional(),
-  maxUses: z.number().int().min(1).max(1000).optional(),
-  vipOnly: z.boolean().optional(),
-  requiredRoles: z.array(z.enum(COMMAND_ROLES)).max(3).optional(),
-});
+export const createCustomCommandSchema = z
+  .object({
+    name: commandNameSchema,
+    aliases: z.array(commandNameSchema).max(5).default([]),
+    description: z.string().trim().min(1).max(200),
+    helpText: z.string().trim().max(2000).optional(),
+    response: z.string().min(1).max(MAX_COMMAND_RESPONSE_LENGTH),
+    category: z.enum(CUSTOM_COMMAND_CATEGORIES).default("general"),
+    enabled: z.boolean().default(true),
+    cooldown: z.number().int().min(0).max(86_400_000).optional(),
+    maxUses: z.number().int().min(1).max(1000).optional(),
+    vipOnly: z.boolean().optional(),
+    requiredRoles: z.array(z.enum(COMMAND_ROLES)).max(3).optional(),
+  })
+  .strict();
 
 /**
  * Fields an admin may override on a built-in command. Names are immutable and
@@ -65,10 +67,25 @@ export const updateBuiltinCommandSchema = z
 /**
  * Partial update for a custom command. Strict so a rename attempt or an
  * unknown key is rejected with a `400` instead of being silently ignored.
+ *
+ * Declared explicitly (not derived from the create schema) because Zod keeps
+ * `.default()` values through `.partial()`, which would let a one-field PATCH
+ * overwrite aliases/category/enabled with create-time defaults. Every field is
+ * `.optional()` and none has a default.
  */
-export const updateCustomCommandSchema = createCustomCommandSchema
-  .partial()
-  .omit({ name: true })
+export const updateCustomCommandSchema = z
+  .object({
+    aliases: z.array(commandNameSchema).max(5).optional(),
+    description: z.string().trim().min(1).max(200).optional(),
+    helpText: z.string().trim().max(2000).optional(),
+    response: z.string().min(1).max(MAX_COMMAND_RESPONSE_LENGTH).optional(),
+    category: z.enum(CUSTOM_COMMAND_CATEGORIES).optional(),
+    enabled: z.boolean().optional(),
+    cooldown: z.number().int().min(0).max(86_400_000).optional(),
+    maxUses: z.number().int().min(1).max(1000).optional(),
+    vipOnly: z.boolean().optional(),
+    requiredRoles: z.array(z.enum(COMMAND_ROLES)).max(3).optional(),
+  })
   .strict();
 
 export type CreateCustomCommandInput = z.input<typeof createCustomCommandSchema>;

@@ -161,6 +161,7 @@ export class CommandRegistryService implements CommandRegistry {
   }
 
   listSync(): RuntimeCommandInfo[] {
+    this.refreshIfStale();
     return [...this.views.values()];
   }
 

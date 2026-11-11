@@ -56,4 +56,26 @@ describe("update schemas", () => {
       }).success,
     ).toBe(true);
   });
+
+  it("does not apply create-schema defaults to a partial update", () => {
+    expect(updateCustomCommandSchema.parse({ enabled: false })).toEqual({
+      enabled: false,
+    });
+
+    const parsed = updateCustomCommandSchema.parse({ description: "Baru" });
+    expect(parsed).toEqual({ description: "Baru" });
+    expect("enabled" in parsed).toBe(false);
+    expect("category" in parsed).toBe(false);
+    expect("aliases" in parsed).toBe(false);
+  });
+
+  it("rejects unknown keys on create and update", () => {
+    expect(
+      createCustomCommandSchema.safeParse({ ...valid, bogus: true }).success,
+    ).toBe(false);
+    expect(
+      updateCustomCommandSchema.safeParse({ enabled: false, bogus: true })
+        .success,
+    ).toBe(false);
+  });
 });

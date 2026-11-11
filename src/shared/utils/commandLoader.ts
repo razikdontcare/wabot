@@ -52,6 +52,29 @@ function extractCommandInfo(candidate: unknown): CommandInfo | undefined {
 }
 
 /**
+ * Picks the command export from a module. A default export wins; otherwise the
+ * first export carrying a valid `commandInfo` is used. This must not depend on
+ * ESM namespace key ordering (multi-export files also export plain helpers).
+ */
+function selectCommandInfo(
+  commandModule: CommandModule,
+): CommandInfo | undefined {
+  const defaultCommandInfo = extractCommandInfo(commandModule.default);
+  if (defaultCommandInfo) {
+    return defaultCommandInfo;
+  }
+
+  for (const candidate of Object.values(commandModule)) {
+    const commandInfo = extractCommandInfo(candidate);
+    if (commandInfo) {
+      return commandInfo;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Imports every built-in command class from `commandsDir` (or the shipped
  * `src/app/commands` directory) and returns its `CommandInfo`.
  *
@@ -70,9 +93,7 @@ export async function loadBuiltinCommands(
     try {
       const moduleUrl = pathToFileURL(join(commandsDir, file)).href;
       const commandModule = (await import(moduleUrl)) as CommandModule;
-      const commandInfo = extractCommandInfo(
-        commandModule.default ?? Object.values(commandModule)[0],
-      );
+      const commandInfo = selectCommandInfo(commandModule);
 
       if (!commandInfo) {
         log.warn(`Command file ${file} does not export a valid command class`);

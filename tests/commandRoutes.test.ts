@@ -58,6 +58,48 @@ describe("command routes", () => {
     expect(res.status).toBe(201);
   });
 
+  it("returns 404 for mutations addressed through an alias", async () => {
+    const customView = { ...view, name: "halo" };
+    const customAliasApp = appWith({
+      getSync: (name: string) =>
+        name === "hi" || name === "halo" ? (customView as never) : undefined,
+    });
+
+    expect(
+      (
+        await customAliasApp.request("/api/commands/hi", {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: false }),
+        })
+      ).status,
+    ).toBe(404);
+
+    const builtinView = {
+      name: "search",
+      aliases: ["ws"],
+      description: "Cari",
+      category: "general",
+      source: "builtin",
+      enabled: true,
+    };
+    const builtinAliasApp = appWith({
+      getSync: (name: string) =>
+        name === "ws" || name === "search" ? (builtinView as never) : undefined,
+    });
+
+    expect(
+      (await builtinAliasApp.request("/api/commands/ws", { method: "DELETE" }))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        await builtinAliasApp.request("/api/commands/ws/reset", {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(404);
+  });
+
   it("maps registry errors to HTTP statuses", async () => {
     const conflict = appWith({
       create: async () => {

@@ -389,12 +389,11 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
           payload.disabledReason = ui.cmdDisabledReason ? ui.cmdDisabledReason.value.trim() : '';
         } else {
           payload.category = ui.cmdCategory ? ui.cmdCategory.value : 'general';
-          if (ui.cmdResponse && ui.cmdResponse.value) payload.response = ui.cmdResponse.value;
+          payload.response = ui.cmdResponse ? ui.cmdResponse.value : '';
         }
 
         if (!state.editing) {
           payload.name = ui.cmdName ? ui.cmdName.value.trim().toLowerCase() : '';
-          if (!payload.response) payload.response = '';
         }
 
         return payload;

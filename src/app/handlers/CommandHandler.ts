@@ -444,21 +444,6 @@ export class CommandHandler {
     log.info(`Successfully registered ${this.getAllCommands().length} commands`);
   }
 
-  private isGameCommand(command: string): boolean {
-    const info = this.getCommandInfo(command);
-    return info ? info.category === "game" : false;
-  }
-
-  private isGeneralCommand(command: string): boolean {
-    const info = this.getCommandInfo(command);
-    return info ? info.category === "general" : false;
-  }
-
-  private isAdminCommand(command: string): boolean {
-    const info = this.getCommandInfo(command);
-    return info ? info.category === "admin" : false;
-  }
-
   private getCommandInfo(command: string): RuntimeCommandInfo | undefined {
     return this.registry?.getSync(command.toLowerCase());
   }

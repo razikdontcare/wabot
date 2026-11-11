@@ -85,4 +85,14 @@ describe("admin console commands script", () => {
     expect(referenced.length).toBeGreaterThan(20);
     referenced.forEach((id) => expect(html).toContain(`id="${id}"`));
   });
+
+  it("always sends the custom response so a cleared field reaches server validation", () => {
+    const script = ADMIN_CONSOLE_COMMANDS_SCRIPT;
+
+    expect(script).not.toContain("if (ui.cmdResponse && ui.cmdResponse.value)");
+    expect(script).not.toContain("if (!payload.response)");
+    expect(script).toMatch(
+      /payload\.response = ui\.cmdResponse \? ui\.cmdResponse\.value : '';/,
+    );
+  });
 });

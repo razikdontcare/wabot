@@ -103,6 +103,43 @@ describe("CommandRegistryService", () => {
     ).rejects.toBeInstanceOf(CommandValidationError);
   });
 
+  it("keeps untouched fields when a custom command is partially updated", async () => {
+    const { registry } = await createRegistry();
+    await registry.create(
+      {
+        name: "halo",
+        aliases: ["hi"],
+        description: "Sapaan",
+        helpText: "Bantuan sapaan",
+        response: "Halo {{args}}",
+        category: "utility",
+      },
+      "api",
+    );
+
+    const disabled = await registry.updateCustom("halo", { enabled: false }, "api");
+
+    expect(disabled.enabled).toBe(false);
+    expect(disabled.disabled).toBe(true);
+    expect(disabled.aliases).toEqual(["hi"]);
+    expect(disabled.category).toBe("utility");
+    expect(disabled.description).toBe("Sapaan");
+    expect(disabled.helpText).toBe("Bantuan sapaan");
+    expect(disabled.customDefinition?.response).toBe("Halo {{args}}");
+    expect(disabled.customDefinition?.aliases).toEqual(["hi"]);
+
+    // Editing a disabled command must not silently re-enable it.
+    const edited = await registry.updateCustom(
+      "halo",
+      { description: "Sapaan baru" },
+      "api",
+    );
+    expect(edited.enabled).toBe(false);
+    expect(edited.description).toBe("Sapaan baru");
+    expect(edited.aliases).toEqual(["hi"]);
+    expect(edited.category).toBe("utility");
+  });
+
   it("keeps built-ins usable when the store is unavailable", async () => {
     const registry = new CommandRegistryService(new BrokenStore(), async () => builtins);
     await registry.initialize();
