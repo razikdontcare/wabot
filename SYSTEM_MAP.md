@@ -1,16 +1,16 @@
 # SYSTEM_MAP.md
 
 ## Metadata
-- **map_version**: 1.0.0
-- **last_updated**: 2026-09-25
-- **last_updated_by**: agent/zed
+- **map_version**: 1.1.0
+- **last_updated**: 2026-11-11
+- **last_updated_by**: agent/runtime-migration
 
 ## Project Overview
-WhatsApp bot with AI integration and modular command system. Built with TypeScript/Bun, using Baileys for WhatsApp connectivity and Hono for the API dashboard.
+WhatsApp bot with AI integration and modular command system. Built with TypeScript/Bun, using Baileys for WhatsApp connectivity and Hono for the API dashboard. Production and Docker execute the TypeScript sources directly (`bun src/index.ts`); there is no compile step and no `dist/` build. Built-in command classes ship as code, while admins can manage data-only custom commands and built-in overrides from the web console (Mongo-backed).
 
 ## Tech Stack
-- **Language**: TypeScript
-- **Runtime**: Bun
+- **Language**: TypeScript (executed directly by Bun; `tsc --noEmit` is typecheck-only)
+- **Runtime**: Bun 1.3.14 (dev, test, production and Docker — pinned)
 - **Package Manager**: Bun
 - **Main Libraries**:
   - `baileys`: WhatsApp Web API
@@ -56,8 +56,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | Path | Purpose | Exports | #layer | #domain |
 | :--- | :--- | :--- | :--- | :--- |
 | `src/app/client/BotClient.ts` | Manages WA connection and event routing | `BotClient` | #app | #bot |
-| `src/app/handlers/CommandHandler.ts` | Loads and executes bot commands | `CommandHandler` | #app | #bot |
-| `src/app/handlers/CommandInterface.ts` | Command structure definitions | `CommandInterface`, `CommandInfo` | #app | #bot |
+| `src/app/handlers/CommandHandler.ts` | Dispatches commands through the shared command registry: core commands, permissions, VIP/roles, cooldowns, AI tool execution, help/games listing | `CommandHandler` | #app | #bot |
+| `src/app/handlers/CommandInterface.ts` | Command structure definitions (`commandClass` optional since data-only custom commands have no class) | `CommandInterface`, `CommandInfo` | #app | #bot |
+| `src/app/handlers/DynamicCommand.ts` | Executes an admin-created data-only custom command by rendering its stored `{{placeholder}}` response template (never executes web-supplied code) | `DynamicCommand` | #app | #bot |
 | `src/app/handlers/CooldownManager.ts` | Manages command rate limits | `CooldownManager` | #app | #bot |
 
 ### Domain Layer
@@ -67,6 +68,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/domain/services/AIProviderRouterService.ts` | Routes requests to different AI providers | `AIProviderRouterService` | #domain | #ai |
 | `src/domain/services/AIResponseService.ts` | Generates AI responses | `AIResponseService` | #domain | #ai |
 | `src/domain/services/BotConfigService.ts` | Manages dynamic bot configuration in DB | `BotConfigService` | #domain | #config |
+| `src/domain/models/CommandDefinition.ts` | Types, Zod schemas, name/alias rules and constants for stored commands (custom commands + built-in overrides) | `CORE_COMMAND_NAMES`, `COMMAND_NAME_PATTERN`, `MAX_COMMAND_RESPONSE_LENGTH`, `createCustomCommandSchema`, `updateCustomCommandSchema`, `updateBuiltinCommandSchema`, `CustomCommandDefinition`, `StoredCommandRecord` | #domain | #config |
+| `src/domain/services/CommandRegistryService.ts` | Merges built-in commands with Mongo overrides/custom commands; name/alias collision validation, template validation, 30 s cache TTL, sync lookups for the message hot path | `CommandRegistryService`, `CommandRegistry`, `RuntimeCommandInfo`, `CommandConflictError`, `CommandNotFoundError`, `CommandStoreUnavailableError`, `CommandValidationError` | #domain | #config |
+| `src/domain/services/CommandStore.ts` | Persistence boundary for stored command records (fakeable in tests) | `CommandStore` | #domain | #config |
 | `src/domain/services/CommandUsageService.ts` | Tracks command usage statistics | `CommandUsageService` | #domain | #stats |
 | `src/domain/services/FreeGamesService.ts` | Checks and notifies about free games | `FreeGamesService` | #domain | #games |
 | `src/domain/services/GameLeaderboardService.ts` | Manages game leaderboards | `GameLeaderboardService` | #domain | #games |
@@ -93,13 +97,19 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | Path | Purpose | Exports | #layer | #domain |
 | :--- | :--- | :--- | :--- | :--- |
 | `src/infrastructure/config/auth.ts` | MongoDB-backed auth state for Baileys | `useMongoDBAuthState` | #infra | #config |
+| `src/infrastructure/config/commandRegistry.ts` | Process-wide command registry singleton shared by the bot handler and the HTTP API (an admin edit is visible to the running bot immediately) | `getCommandRegistry`, `resetCommandRegistryForTests` | #infra | #config |
 | `src/infrastructure/config/config.ts` | Static and dynamic config initialization | `BotConfig`, `getCurrentConfig` | #infra | #config |
 | `src/infrastructure/config/mongo.ts` | Atomic MongoDB client connection management | `getMongoClient`, `isMongoConnected`, `getActiveMongoClient` | #infra | #infra |
+| `src/infrastructure/config/mongoCommandStore.ts` | Mongo implementation of `CommandStore` (`bot_commands` collection, lazy client access, unique name index) | `MongoCommandStore` | #infra | #config |
 | `src/infrastructure/config/scheduler.ts` | Initializes cron jobs | `scheduleVIPCleanup`, etc. | #infra | #bot |
+| `src/infrastructure/web/adminConsoleCommandsBody.ts` | Admin console Commands section markup | `ADMIN_CONSOLE_COMMANDS_BODY` | #infra | #web |
+| `src/infrastructure/web/adminConsoleCommandsStyles.ts` | Admin console Commands section stylesheet string | `ADMIN_CONSOLE_COMMANDS_STYLES` | #infra | #web |
+| `src/infrastructure/web/adminConsoleCommandsScript.ts` | Admin console Commands client logic (self-contained IIFE; `textContent` only) | `ADMIN_CONSOLE_COMMANDS_SCRIPT` | #infra | #web |
 | `src/infrastructure/web/adminConsolePage.ts` | HTML rendering for admin dashboard | `renderAdminConsoleHtml` | #infra | #web |
 | `src/infrastructure/web/adminConsoleBody.ts` | Admin console body markup | `ADMIN_CONSOLE_BODY` | #infra | #web |
 | `src/infrastructure/web/adminConsoleStyles.ts` | Admin console stylesheet string | `ADMIN_CONSOLE_STYLES` | #infra | #web |
 | `src/infrastructure/web/adminConsoleScript.ts` | Admin console client logic | `ADMIN_CONSOLE_SCRIPT` | #infra | #web |
+| `src/infrastructure/web/commandRoutes.ts` | Hono routes for command management (list/create/update/delete/reset) behind Basic Auth | `registerCommandRoutes`, `toPublicCommandView`, `PublicCommandView` | #infra | #web |
 
 ### Shared Layer & Root
 | Path | Purpose | Exports | #layer | #domain |
@@ -113,6 +123,9 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/shared/utils/whatsapp_formatter.ts` | Formats standard Markdown to WhatsApp-compatible markup | `formatResponseForWhatsApp` | #shared | #utils |
 | `src/shared/utils/ytdlp.ts` | YouTube download utility | `ytdlp` | #shared | #utils |
 | `src/shared/utils/stickerProcessor.ts` | Sticker encoding: still (sharp) and animated (ffmpeg/libwebp_anim) WebP, EXIF pack metadata, WebP container normalisation for WhatsApp Web transparency | `addExif`, `createSticker`, `createAnimatedSticker`, `normalizeStickerWebp` | #shared | #utils |
+| `src/shared/utils/sourcePaths.ts` | Resolves worker-only modules from the TypeScript sources (`src/...`) instead of a compiled `dist/` layout | `resolveSourceModule`, `resolveWorkerScriptPath` | #shared | #utils |
+| `src/shared/utils/commandLoader.ts` | Runtime-agnostic discovery of built-in command classes at boot: lists `.ts`/`.js` files (skips `.d.ts`/subdirectories) and dynamically imports each `static commandInfo` (dedupes names, warns on invalid exports) | `selectCommandFiles`, `loadBuiltinCommands` | #shared | #utils |
+| `src/shared/utils/commandTemplates.ts` | Renders and validates admin-managed `{{placeholder}}` response templates (`args`, `arg1`…`arg9`, `user`, `chat`, `prefix`, `botname`, `date`, `time`, `command`) | `COMMAND_TEMPLATE_PLACEHOLDERS`, `renderCommandTemplate`, `validateCommandTemplate`, `CommandTemplateContext` | #shared | #utils |
 | `src/shared/utils/commandCapture.ts` | Socket proxy that records the chat messages a bot command sends, so the AI can see command output and detect handled failures (❌ replies) | `createCommandCapture`, `classifyCommandOutcome`, `CapturedCommandMessage` | #shared | #ai |
 | `src/shared/utils/groupDirectory.ts` | Joined-group directory: cached group listing, name/JID resolution, and group text sending used by the AI tools and `announce` | `fetchJoinedGroups`, `resolveGroup`, `sendGroupText`, `GroupSummary` | #shared | #utils |
 | `src/shared/utils/userRoles.ts` | Role lookup that considers both the JID and LID identities Baileys may attach to a message | `getEffectiveUserIds`, `getUserRolesConsideringAlt`, `isAdminConsideringAlt` | #shared | #utils |
@@ -121,6 +134,7 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | Path | Purpose | Exports | #layer | #domain |
 | :--- | :--- | :--- | :--- | :--- |
 | `docs/SEND_MESSAGE_API.md` | Client integration guide for the `/api/send-message` endpoint (auth, JID formats, request/response, rate limits, examples) | N/A | #docs | #api |
+| `docs/COMMANDS.md` | Admin guide for command management: built-in vs custom commands, console actions, `{{placeholder}}` templates, limits, `/api/commands` routes/errors, storage/cache, security model, direct-TS runtime notes | N/A | #docs | #api |
 | `docs/TEXT_RPG_DESIGN.md` | Design spec for the persistent text RPG (solo + party, engine-authoritative rules, AI narration contracts) | N/A | #docs | #games |
 
 ## API Surface
@@ -129,6 +143,13 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | GET | `/admin` | Admin Console Dashboard | Yes |
 | GET | `/admin/styles.css` | Admin Console Stylesheet | Yes |
 | GET | `/admin/app.js` | Admin Console Client Script | Yes |
+| GET | `/admin/commands.js` | Admin Console Commands Client Script | Yes |
+| GET | `/api/commands` | List built-in + custom commands with runtime overrides | Yes |
+| POST | `/api/commands` | Create a data-only custom command (`201`; validation `400`, collision `409`, Mongo down `503`) | Yes |
+| GET | `/api/commands/:name` | Fetch one command (aliases resolve) | Yes |
+| PATCH | `/api/commands/:name` | Update a custom command or a built-in override (strict body; rename `400`) | Yes |
+| DELETE | `/api/commands/:name` | Delete a custom command (built-ins `409`) | Yes |
+| POST | `/api/commands/:name/reset` | Drop a built-in override, restoring code defaults (customs `409`) | Yes |
 | GET | `/api/logs` | Fetch recent bot logs | Yes |
 | POST | `/api/logs/clear` | Clear log buffer | Yes |
 | GET | `/api/logs/stream` | SSE stream for live logs | Yes |
@@ -147,9 +168,16 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `Session` | `game`, `data`, `timestamp` | Represents an active user session (e.g. game) |
 | `LogEntry` | `id`, `timestamp`, `level`, `message` | In-memory log representation |
 | `BotConfig` | `prefix`, `admins`, `aiProvider`, etc. | Core bot settings |
+| `StoredBuiltinOverride` (Mongo `bot_commands`) | `_id` (`builtin:<name>`), `kind: "builtin"`, `name`, optional `aliases`, `description`, `helpText`, `cooldown`, `maxUses`, `vipOnly`, `requiredRoles`, `enabled`, `disabledReason`, plus `updatedAt`/`updatedBy` | Per-built-in override merged over the code's `static commandInfo`; absent record = code defaults. Reset deletes it |
+| `StoredCustomCommand` (Mongo `bot_commands`) | `_id` (`custom:<name>`), `kind: "custom"`, `name`, `aliases`, `description`, `helpText?`, `category` (`general`/`utility`), `response` (`{{placeholder}}` template), `enabled`, `cooldown?`, `maxUses?`, `vipOnly?`, `requiredRoles?`, `createdBy`/`createdAt`, `updatedBy`/`updatedAt` | Admin-created data-only command; it can only reply with rendered text |
+| `PublicCommandView` | `name`, `aliases`, `description`, `helpText?`, `category`, `source` (`builtin`/`custom`), `enabled`, `disabledReason?`, `cooldown?`, `maxUses?`, `vipOnly?`, `requiredRoles?`, `response?`, `updatedAt?`, `updatedBy?` | API/UI projection returned by `/api/commands`; never exposes `commandClass`/`customDefinition` |
 | `AuthDocument` | `_id`, `data` (Binary) | MongoDB document for auth credentials |
 | `SendMessageRequest` | `jid`, `text` | Body for `POST /api/send-message` (validated by zod `sendMessageSchema`) |
 | `SendMessageResponse` | `success`, `messageId`, `jid`, `requestId` | Success payload for `POST /api/send-message` |
+
+The `bot_commands` collection lives in the Mongo database named by `BotConfig.sessionName`
+(default `meowbot`), with a unique index on `name`. There is no migration: the collection
+starts empty, and deleting documents (or rolling back the image) leaves inert data behind.
 
 ## Conventions
 - **Naming**: `PascalCase` for files/classes, `camelCase` for variables/methods.
@@ -160,12 +188,18 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **Gotcha**: To prevent `MongoNotConnectedError` when the database client is recreated, avoid caching `db` or `collection` objects in asynchronous closures; fetch them dynamically from the active client on each request.
 - **Convention**: VIP-only providers (e.g. `deepseek`) are gated in `AskAICommand.handleProviderCommand` — the router itself is provider-agnostic.
 - **Gotcha**: `POST /api/send-message` normalizes bare E.164 numbers to `@s.whatsapp.net` and only accepts `@s.whatsapp.net`/`@lid`/`@g.us`/`@broadcast`/`@newsletter` suffixes; it is rate limited in-memory per IP (see `docs/SEND_MESSAGE_API.md`).
+- **Runtime**: Production/Docker run `bun src/index.ts` directly (Bun `1.3.14`). There is no compile step and no `dist/`; `bun run typecheck` is `tsc --noEmit` only. Keep relative imports with `.js` extensions — Bun resolves them to `.ts`.
+- **Command discovery**: Built-in commands are TypeScript classes in `src/app/commands/` exposing `static commandInfo`, discovered at boot by `commandLoader` (`.ts`/`.js`, `.d.ts` and subdirectories skipped). Worker-only modules resolve from `src/` through `sourcePaths`. New command *behaviour* always ships as code.
+- **Web command management**: `CommandRegistryService` merges code commands with Mongo overrides/custom commands; the `getCommandRegistry()` singleton is shared by `CommandHandler` and the HTTP API, so writes refresh the in-process cache synchronously while other replicas pick changes up within the 30 s cache TTL.
+- **Custom commands are data, not code**: never execute code supplied from the web console. Custom commands are `{{placeholder}}` text templates validated at save time, and the console renders API strings with `textContent` (never `innerHTML`).
+- **Command names**: lowercase, `^[a-z0-9][a-z0-9_-]{0,31}$`, immutable after creation; aliases (max 5) must be unique across all commands; core names (`games`, `help`, `stop`, `stats`) are reserved. Built-ins are tuned by overrides and restored with reset — never edited in place.
+- **Command API errors**: `400` invalid JSON/validation (including rename attempts on strict PATCH), `404` unknown command, `409` name/alias collision or illegal delete/reset, `503` Mongo store unavailable (built-in commands keep working).
 
 ## Data Flow: "!help" Command
 1.  **Ingestion**: `BotClient` receives message via `baileys` socket event.
 2.  **Routing**: `CommandHandler` identifies the command and prefix.
 3.  **Validation**: Permission and maintenance checks performed.
-4.  **Execution**: `CommandHandler.handleHelpCommand` generates list of commands.
+4.  **Execution**: `CommandHandler.handleHelpCommand` lists every entry from the shared command registry (`CommandRegistryService.listSync()`, overrides applied, disabled commands suffixed ` (nonaktif)`; core commands are listed separately from code).
 5.  **Response**: `sock.sendMessage` dispatches response back to WhatsApp.
 
 ## Changelog
@@ -207,3 +241,5 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 - **2026-10-27** [minor] (agent/zed): `execute_bot_command` now returns the command's real outcome: `CommandHandler.executeCommandForAI` runs commands through a capturing socket proxy (`createCommandCapture`) and reports `Status` plus the chat messages/❌ errors the command produced, instead of assuming success whenever no exception was thrown. Added `tests/commandCapture.test.ts` and `tests/promptPrivileges.test.ts`.
 - **2026-10-27** [minor] (agent/zed): Added admin group messaging: AI tools `list_groups`/`send_group_message` (admin-only, with dry-run preview and name/JID resolution via `GroupDirectory`) and the manual `announce` command (`announce list`, `announce <grup> | <pesan>`, JID target, or reply-to-message). Group lookups cache for 60s. Role checks now share `userRoles` helpers so LID/PN identities resolve consistently for commands and AI tools.
 - **2026-10-27** [patch] (agent/zed): Fixed the release workflow failing at `oven-sh/setup-bun@v1` with HTTP 403 from `bun.sh/download`. It now uses `setup-bun@v2` with Bun pinned to `1.3.14` (v2 downloads the GitHub release asset and skips tag resolution), and the Docker builder pins the same Bun version for parity.
+- **2026-11-11** [minor] (agent/runtime-migration): Production and Docker now execute the TypeScript entrypoint directly with Bun `1.3.14` (`bun src/index.ts`): no `tsc` build and no `dist/` in the image. Added runtime-agnostic built-in discovery (`commandLoader`) and worker source-path resolution (`sourcePaths`), made `tsconfig.json` non-emitting (`tsc --noEmit` is typecheck-only), rewrote the Dockerfile as a two-stage Bun image, and added a typecheck step to the release workflow.
+- **2026-11-11** [minor] (agent/runtime-migration): Added Mongo-backed web command management: `CommandRegistryService` + `bot_commands` collection merge built-in code commands with admin overrides and data-only custom commands (`{{placeholder}}` response templates, 1–4096 chars), shared through a `getCommandRegistry()` singleton between the bot and the API (immediate in-process refresh, 30 s cross-replica TTL). Exposed six `/api/commands` routes and a Commands section in the `/admin` console, with Basic Auth, collision/template validation and no code execution from the UI. Added `docs/COMMANDS.md`.
