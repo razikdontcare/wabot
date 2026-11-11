@@ -179,6 +179,12 @@ export class BotClient {
           this.usageService,
         );
 
+        // Share the live handler with the AI tools and wait for the registry
+        // before routing messages through it.
+        setCommandHandler(this.commandHandler);
+        await this.commandHandler.waitForInitialization();
+        log.info("CommandHandler re-initialized successfully");
+
         // this.store.bind(this.sock.ev);
       } catch (error) {
         log.error("Failed to initialize WhatsApp session:", error);

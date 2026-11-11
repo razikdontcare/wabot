@@ -1,4 +1,5 @@
 import { CommandInfo, CommandInterface } from "./CommandInterface.js";
+import { DynamicCommand } from "./DynamicCommand.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { CommandUsageService } from "../../domain/services/CommandUsageService.js";
 import {
@@ -18,11 +19,15 @@ import {
 } from "../../shared/utils/userRoles.js";
 import { proto } from "baileys";
 import os from "os";
-import { loadBuiltinCommands } from "../../shared/utils/commandLoader.js";
+import { getCommandRegistry } from "../../infrastructure/config/commandRegistry.js";
+import type {
+  CommandRegistry,
+  RuntimeCommandInfo,
+} from "../../domain/services/CommandRegistryService.js";
 
 export class CommandHandler {
-  private commands: Map<string, CommandInfo> = new Map();
-  private aliases: Map<string, string> = new Map();
+  private registry: CommandRegistry | null = null;
+  private readonly registryPromise: Promise<CommandRegistry>;
   private cooldownManager: CooldownManager = new CooldownManager();
   private initialized: boolean = false;
   private initializationPromise: Promise<void>;
@@ -30,9 +35,25 @@ export class CommandHandler {
   constructor(
     private sessionService: SessionService,
     private usageService?: CommandUsageService,
+    options: {
+      registry?: CommandRegistry;
+      sessionCleanupIntervalMs?: number;
+    } = {},
   ) {
+    this.registryPromise = options.registry
+      ? Promise.resolve(options.registry)
+      : getCommandRegistry();
+
+    const sessionCleanupIntervalMs =
+      options.sessionCleanupIntervalMs ?? 1800000; // 30 minutes
+    if (sessionCleanupIntervalMs > 0) {
+      setInterval(
+        () => this.sessionService.cleanupExpiredSessions(),
+        sessionCleanupIntervalMs,
+      );
+    }
+
     this.initializationPromise = this.initialize();
-    setInterval(() => this.sessionService.cleanupExpiredSessions(), 1800000); // 30 minutes
   }
 
   async waitForInitialization(): Promise<void> {
@@ -41,16 +62,6 @@ export class CommandHandler {
 
   isInitialized(): boolean {
     return this.initialized;
-  }
-
-  async registerCommands() {
-    const commands = await loadBuiltinCommands();
-
-    for (const commandInfo of commands) {
-      this.registerCommand(commandInfo);
-    }
-
-    log.info(`Successfully registered ${this.commands.size} commands`);
   }
 
   async isCommand(text: string): Promise<boolean> {
@@ -265,11 +276,11 @@ export class CommandHandler {
 
   // Methods for AI command access
   getAllCommands(): CommandInfo[] {
-    return Array.from(this.commands.values());
+    return this.registry?.listSync() ?? [];
   }
 
   getCommandsByCategory(category: CommandInfo["category"]): CommandInfo[] {
-    return Array.from(this.commands.values()).filter(
+    return (this.registry?.listSync() ?? []).filter(
       (cmd) => cmd.category === category,
     );
   }
@@ -426,18 +437,11 @@ export class CommandHandler {
   }
 
   private async initialize(): Promise<void> {
-    await this.registerCommands();
+    const registry = await this.registryPromise;
+    this.registry = registry;
+    await registry.initialize();
     this.initialized = true;
-  }
-
-  private registerCommand(info: CommandInfo): void {
-    this.commands.set(info.name.toLowerCase(), info);
-
-    if (info.aliases) {
-      for (const alias of info.aliases) {
-        this.aliases.set(alias.toLowerCase(), info.name.toLowerCase());
-      }
-    }
+    log.info(`Successfully registered ${this.getAllCommands().length} commands`);
   }
 
   private isGameCommand(command: string): boolean {
@@ -455,13 +459,8 @@ export class CommandHandler {
     return info ? info.category === "admin" : false;
   }
 
-  private getCommandInfo(command: string): CommandInfo | undefined {
-    // Check if it's an alias first
-    const actualCommand = this.aliases.has(command)
-      ? this.aliases.get(command)!
-      : command;
-
-    return this.commands.get(actualCommand);
+  private getCommandInfo(command: string): RuntimeCommandInfo | undefined {
+    return this.registry?.getSync(command.toLowerCase());
   }
 
   private getCommandInstance(command: string): CommandInterface {
@@ -470,19 +469,12 @@ export class CommandHandler {
       throw new Error(`Command not found: ${command}`);
     }
 
-    // Task 6 made `commandClass` optional for custom (data-only) commands;
-    // Task 7 will dispatch those through DynamicCommand. Until then a command
-    // without a class cannot be instantiated.
-    const { customDefinition } = info as CommandInfo & {
-      customDefinition?: unknown;
-    };
+    if (info.customDefinition) {
+      return new DynamicCommand(info.customDefinition);
+    }
 
     if (!info.commandClass) {
-      throw new Error(
-        customDefinition
-          ? `Command '${command}' is a custom command and cannot be instantiated`
-          : `Command '${command}' has no command class registered`,
-      );
+      throw new Error(`Command '${command}' has no command class registered`);
     }
 
     return new info.commandClass();
@@ -626,7 +618,7 @@ export class CommandHandler {
   }
 
   private async listGames(jid: string, sock: WebSocketInfo) {
-    const gameCommands = Array.from(this.commands.values()).filter(
+    const gameCommands = (this.registry?.listSync() ?? []).filter(
       (cmd) => cmd.category === "game",
     );
 
@@ -681,8 +673,9 @@ export class CommandHandler {
       const adminCommands: string[] = [];
       const utilityCommands: string[] = [];
 
-      for (const [_cmdName, info] of this.commands) {
-        const commandText = `*${config.prefix}${info.name}* - ${info.description}`;
+      for (const info of this.registry?.listSync() ?? []) {
+        const statusSuffix = info.disabled ? " (nonaktif)" : "";
+        const commandText = `*${config.prefix}${info.name}* - ${info.description}${statusSuffix}`;
 
         switch (info.category) {
           case "game":
