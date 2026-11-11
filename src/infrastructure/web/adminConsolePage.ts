@@ -15,6 +15,7 @@ export function renderAdminConsoleHtml(): string {
 <body>
 ${ADMIN_CONSOLE_BODY}
   <script src="/admin/app.js" defer></script>
+  <script src="/admin/commands.js" defer></script>
 </body>
 </html>`;
 }

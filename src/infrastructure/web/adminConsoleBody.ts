@@ -1,3 +1,5 @@
+import { ADMIN_CONSOLE_COMMANDS_BODY } from "./adminConsoleCommandsBody.js";
+
 export const ADMIN_CONSOLE_BODY = `<div class="page">
     <header class="topbar">
       <div class="topbar-row">
@@ -15,6 +17,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
         <a href="#overview">Connection</a>
         <a href="#operations">Health</a>
         <a href="#analytics">Usage</a>
+        <a href="#commands">Commands</a>
         <a href="#configuration">Settings</a>
         <a href="#logs">Logs</a>
       </nav>
@@ -415,5 +418,7 @@ export const ADMIN_CONSOLE_BODY = `<div class="page">
           </article>
         </div>
       </section>
+
+${ADMIN_CONSOLE_COMMANDS_BODY}
     </main>
   </div>`;

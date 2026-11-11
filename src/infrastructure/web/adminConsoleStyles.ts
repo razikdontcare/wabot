@@ -1,3 +1,5 @@
+import { ADMIN_CONSOLE_COMMANDS_STYLES } from "./adminConsoleCommandsStyles.js";
+
 export const ADMIN_CONSOLE_STYLES = `:root {
       --bg: #f4f1eb;
       --bg-soft: #ece7dd;
@@ -640,4 +642,4 @@ export const ADMIN_CONSOLE_STYLES = `:root {
         opacity: 1;
         transform: translateY(0);
       }
-    }`;
+    }` + ADMIN_CONSOLE_COMMANDS_STYLES;
