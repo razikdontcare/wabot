@@ -17,14 +17,9 @@
       "./node_modules/@types",
       "./src/types"
     ],
-    // Output configuration
-    "outDir": "dist",
-    "sourceMap": true,
-    "declaration": true,
-    // Remove bundler-specific options
-    // "allowImportingTsExtensions": true,
-    // "verbatimModuleSyntax": true,
-    "noEmit": false,
+    // Output configuration: Bun runs the TypeScript sources directly, so the
+    // compiler is only used for `tsc --noEmit` typechecking.
+    "noEmit": true,
     // Best practices
     "strict": true,
     "skipLibCheck": true,

@@ -4,7 +4,7 @@ import {BotConfig, log} from '../../infrastructure/config/config.js';
 import {WebSocketInfo} from '../../shared/types/types.js';
 import {SessionService} from '../../domain/services/SessionService.js';
 import {WorkerPool} from '../../shared/utils/WorkerPool.js';
-import {join} from 'path';
+import {resolveSourceModule} from '../../shared/utils/sourcePaths.js';
 
 export class VideoToAudioCommand extends CommandInterface {
     static commandInfo: CommandInfo = {
@@ -119,12 +119,8 @@ Reply video dengan: ${BotConfig.prefix}v2a ogg`,
             log.info(`Converting video to ${format} audio via Worker Pool`);
             
             const workerPool = WorkerPool.getInstance();
-            const ffmpegPath = () => {
-                if (process.env.NODE_ENV === 'production' || process.env.USE_DIST) {
-                    return join(process.cwd(), "dist", "shared", "utils", "ffmpeg.js");
-                }
-                return join(process.cwd(), "src", "shared", "utils", "ffmpeg.js");
-            };
+            const ffmpegPath = () =>
+                resolveSourceModule('shared', 'utils', 'ffmpeg.ts');
 
             const result = await workerPool.run<Uint8Array>(
                 ffmpegPath(),

@@ -7,3 +7,13 @@ npm-debug.log
 README.md
 .env
 *.log
+dist
+tests
+docs
+.agents
+.idea
+SYSTEM_MAP.md
+eslint.config.js
+nodemon.json
+tsconfig.json
+test*.ts

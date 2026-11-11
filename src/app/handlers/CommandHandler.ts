@@ -18,13 +18,7 @@ import {
 } from "../../shared/utils/userRoles.js";
 import { proto } from "baileys";
 import os from "os";
-
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { loadBuiltinCommands } from "../../shared/utils/commandLoader.js";
 
 export class CommandHandler {
   private commands: Map<string, CommandInfo> = new Map();
@@ -50,49 +44,10 @@ export class CommandHandler {
   }
 
   async registerCommands() {
-    const commandsDir = path.resolve(__dirname, "../commands");
+    const commands = await loadBuiltinCommands();
 
-    // Check if we're in development (TypeScript) or production (JavaScript)
-    const isDev = process.env.NODE_ENV !== "production";
-    const fileExtension = isDev ? ".ts" : ".js";
-
-    let files: string[] = [];
-    try {
-      files = fs
-        .readdirSync(commandsDir)
-        .filter((f) => f.endsWith(fileExtension));
-    } catch (_error) {
-      // If no files found with one extension, try the other
-      const altExtension = isDev ? ".js" : ".ts";
-      try {
-        files = fs
-          .readdirSync(commandsDir)
-          .filter((f) => f.endsWith(altExtension));
-      } catch (_altError) {
-        log.error(`No command files found in ${commandsDir}`);
-        return;
-      }
-    }
-
-    log.info(`Loading ${files.length} command files from ${commandsDir}`);
-
-    for (const file of files) {
-      try {
-        const commandModule = await import(path.join(commandsDir, file));
-        // Support both default and named exports
-        const CommandClass =
-          commandModule.default || Object.values(commandModule)[0];
-        if (!CommandClass || !CommandClass.commandInfo) {
-          log.warn(
-            `Command file ${file} does not export a valid command class`,
-          );
-          continue;
-        }
-        this.registerCommand(CommandClass.commandInfo);
-        log.debug(`Registered command: ${CommandClass.commandInfo.name}`);
-      } catch (error) {
-        log.error(`Failed to load command from ${file}:`, error);
-      }
+    for (const commandInfo of commands) {
+      this.registerCommand(commandInfo);
     }
 
     log.info(`Successfully registered ${this.commands.size} commands`);
@@ -513,6 +468,21 @@ export class CommandHandler {
     const info = this.getCommandInfo(command);
     if (!info) {
       throw new Error(`Command not found: ${command}`);
+    }
+
+    // Task 6 made `commandClass` optional for custom (data-only) commands;
+    // Task 7 will dispatch those through DynamicCommand. Until then a command
+    // without a class cannot be instantiated.
+    const { customDefinition } = info as CommandInfo & {
+      customDefinition?: unknown;
+    };
+
+    if (!info.commandClass) {
+      throw new Error(
+        customDefinition
+          ? `Command '${command}' is a custom command and cannot be instantiated`
+          : `Command '${command}' has no command class registered`,
+      );
     }
 
     return new info.commandClass();

@@ -1,54 +1,24 @@
-# Build stage
-FROM node:24-alpine AS builder
+# syntax=docker/dockerfile:1
 
-# Install build dependencies
-RUN apk add --no-cache curl build-base python3 vips-dev bash
-
-# Install Bun (keep in sync with .github/workflows/release.yml)
-ARG BUN_VERSION=bun-v1.3.14
-RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}" \
-    && ln -s /root/.bun/bin/bun /usr/local/bin/bun
-
+FROM oven/bun:1.3.14-alpine AS deps
+RUN apk add --no-cache bash curl build-base python3 vips-dev
 WORKDIR /app
-
-# Copy package files
 COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
 
-# Install dependencies
-RUN bun install
-
-# Copy project files
-COPY . .
-
-# Build TypeScript
-RUN bun run tsc
-
-# Copy markdown prompt files to dist
-RUN mkdir -p dist/app/commands/prompts && \
-    cp src/app/commands/prompts/*.md dist/app/commands/prompts/ || true
-
-# Production stage
-FROM node:24-alpine
-
-# Install runtime dependencies only (fontconfig + DejaVu for RPG map SVG text)
+FROM oven/bun:1.3.14-alpine AS runtime
 RUN apk add --no-cache vips-dev ffmpeg python3 py3-pip curl ca-certificates aria2 fontconfig font-dejavu
-
-# Install yt-dlp with default dependencies
 RUN python3 -m venv /opt/yt-dlp-venv \
     && /opt/yt-dlp-venv/bin/pip install -U --pre --no-cache-dir "yt-dlp[default,curl-cffi]" \
     && ln -s /opt/yt-dlp-venv/bin/yt-dlp /usr/local/bin/yt-dlp \
     && /opt/yt-dlp-venv/bin/pip install -U --no-cache-dir yt-dlp-ejs \
     && ln -s /opt/yt-dlp-venv/bin/yt-dlp-ejs /usr/local/bin/yt-dlp-ejs
-
 WORKDIR /app
-
-# Copy built files and dependencies from builder stage
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-
-# Set environment variables
+COPY --from=deps /app/node_modules ./node_modules
+# Copies src (TypeScript + prompt .md files), package.json, bun.lock and the
+# optional cookies.txt the release workflow creates. .dockerignore keeps the
+# image free of tests, docs, dist, tooling config and local junk.
+COPY . .
 ENV NODE_ENV=production
-
-# Start the application using Node.js
-CMD ["node", "dist/index.js"]
+EXPOSE 5000
+CMD ["bun", "src/index.ts"]
