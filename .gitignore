@@ -177,3 +177,5 @@ dist
 *_session/
 
 test.ts
+# Superpowers SDD scratch workspace
+.superpowers/
