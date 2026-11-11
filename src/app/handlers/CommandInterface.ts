@@ -8,7 +8,7 @@ export interface CommandInfo {
     description: string;
     helpText?: string; // Inline command documentation
     category: 'game' | 'general' | 'admin' | 'utility';
-    commandClass: new () => CommandInterface;
+    commandClass?: new () => CommandInterface;
     cooldown?: number;
     maxUses?: number;
     requiredRoles?: import('../../infrastructure/config/config.js').UserRole[];
