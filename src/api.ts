@@ -40,6 +40,7 @@ import {
 } from "./shared/logger/logger.js";
 import { renderAdminConsoleHtml } from "./infrastructure/web/adminConsolePage.js";
 import { ADMIN_CONSOLE_SCRIPT } from "./infrastructure/web/adminConsoleScript.js";
+import { ADMIN_CONSOLE_COMMANDS_SCRIPT } from "./infrastructure/web/adminConsoleCommandsScript.js";
 import { ADMIN_CONSOLE_STYLES } from "./infrastructure/web/adminConsoleStyles.js";
 import { registerCommandRoutes } from "./infrastructure/web/commandRoutes.js";
 import { isMongoConnected } from "./infrastructure/config/mongo.js";
@@ -146,6 +147,14 @@ app.get("/admin/styles.css", () => {
 });
 app.get("/admin/app.js", () => {
   return new Response(ADMIN_CONSOLE_SCRIPT, {
+    headers: {
+      "Content-Type": "application/javascript; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+});
+app.get("/admin/commands.js", () => {
+  return new Response(ADMIN_CONSOLE_COMMANDS_SCRIPT, {
     headers: {
       "Content-Type": "application/javascript; charset=utf-8",
       "Cache-Control": "no-store",
