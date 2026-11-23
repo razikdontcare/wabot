@@ -10,6 +10,7 @@ import {
 } from "../../shared/utils/ytdlp.js";
 import extractUrlsFromText from "../../shared/utils/extractUrlsFromText.js";
 import { createReadStream } from "fs";
+import { prepareWhatsAppVideo } from "../../shared/utils/ffmpeg.js";
 import {
   registerPublicDownload,
   removePublicDownload,
@@ -244,7 +245,7 @@ export class DownloaderCommand extends CommandInterface {
         });
       }
 
-      log.info("Using file-based download to ensure playability");
+      log.info("Using file-based download");
       let downloadResult;
 
       try {
@@ -278,10 +279,32 @@ export class DownloaderCommand extends CommandInterface {
       const durationText = this.formatDuration(videoInfo?.duration || 0);
       const title = videoInfo?.title || "Unknown";
 
-      const fileSize = downloadResult.size ||
+      let fileSize = downloadResult.size ||
         (videoInfo?.filesize as number) ||
         (videoInfo?.filesize_approx as number) ||
         0;
+
+      if (downloadMode === "video" && !sendAsDocument && fileSize <= this.MAX_MEDIA_SIZE_MB * 1024 ** 2) {
+        let prepared;
+        try {
+          prepared = await prepareWhatsAppVideo(downloadResult.filePath);
+        } catch (error) {
+          await downloadResult.cleanup();
+          log.error("Failed to prepare WhatsApp video:", error);
+          this.queueManager.failDownload(downloadId, "Failed to prepare WhatsApp video");
+          await sock.sendMessage(jid, {
+            text: "❌ Video tidak dapat disiapkan untuk WhatsApp.",
+            ...(progressMessageKey ? { edit: progressMessageKey } : {}),
+          });
+          return;
+        }
+        if (prepared) {
+          await downloadResult.cleanup();
+          downloadResult = { ...downloadResult, ...prepared };
+          fileSize = prepared.size;
+        }
+      }
+
       const fileSizeMB = fileSize / (1024 * 1024);
 
       if (fileSize > 0 && fileSizeMB > this.MAX_DOCUMENT_SIZE_MB) {

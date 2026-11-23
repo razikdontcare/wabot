@@ -2,6 +2,7 @@ import { CommandInfo, CommandInterface } from "./CommandInterface.js";
 import { DynamicCommand } from "./DynamicCommand.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { CommandUsageService } from "../../domain/services/CommandUsageService.js";
+import { VIPService } from "../../domain/services/VIPService.js";
 import {
   getCurrentConfig,
   log,
@@ -148,43 +149,22 @@ export class CommandHandler {
           return;
         }
 
-        // Check VIP status
-        const { VIPService } = await import(
-          "../../domain/services/VIPService.js"
-        );
-        const vipService = await VIPService.getInstance();
-        const isVIP = await vipService.isVIP(user);
-
-        // VIP-only command check
-        if (commandInfo.vipOnly && !isVIP) {
-          const userRoles = await this.getUserRolesConsideringAlt(user, msg);
-          const isAdmin = userRoles.includes("admin");
-          if (!isAdmin) {
-            await sock.sendMessage(jid, {
-              text: `${config.emoji.error} Perintah ini hanya untuk VIP members! 👑\n\nGunakan !vip info untuk mengetahui cara mendapatkan VIP.`,
-            });
-            return;
-          }
-        }
-
-        // Permission check for requiredRoles considering both LID/PN
-        if (commandInfo.requiredRoles && commandInfo.requiredRoles.length > 0) {
-          const userRoles = await this.getUserRolesConsideringAlt(user, msg);
-          const hasRole = commandInfo.requiredRoles.some((role) =>
-            userRoles.includes(role),
-          );
-          if (!hasRole) {
-            await sock.sendMessage(jid, {
-              text: `${config.emoji.error} Kamu tidak memiliki izin untuk menggunakan perintah ini.`,
-            });
-            return;
-          }
+        const vipBypassCooldown = commandInfo.vipBypassCooldown === true;
+        const isVIP = commandInfo.vipOnly || (commandInfo.cooldown && vipBypassCooldown)
+          ? await this.hasActiveVIP(user)
+          : false;
+        const denial = await this.getPermissionDenial(commandInfo, user, msg, isVIP);
+        if (denial) {
+          const reason = denial === "vip"
+            ? "Perintah ini hanya untuk VIP members! 👑\n\nGunakan !vip info untuk mengetahui cara mendapatkan VIP."
+            : "Kamu tidak memiliki izin untuk menggunakan perintah ini.";
+          await sock.sendMessage(jid, { text: `${config.emoji.error} ${reason}` });
+          return;
         }
 
         const actualCommand = commandInfo.name;
 
         // Cooldown check - VIP users bypass cooldown only if explicitly enabled
-        const vipBypassCooldown = commandInfo.vipBypassCooldown === true; // Explicit opt-in
         const shouldCheckCooldown =
           commandInfo.cooldown && !(isVIP && vipBypassCooldown);
 
@@ -302,16 +282,7 @@ export class CommandHandler {
     const info = this.getCommandInfo(name);
     if (!info || info.disabled) return false;
 
-    // Check permissions
-    if (info.requiredRoles && info.requiredRoles.length > 0) {
-      const userRoles = await getUserRolesConsideringAlt(user, msg);
-      const hasRole = info.requiredRoles.some((role) =>
-        userRoles.includes(role),
-      );
-      if (!hasRole) return false;
-    }
-
-    return true;
+    return !(await this.getPermissionDenial(info, user, msg));
   }
 
   async executeCommandForAI(
@@ -341,7 +312,7 @@ export class CommandHandler {
       }
 
       // Check permissions
-      if (!(await this.canUserExecuteCommand(commandName, user, msg))) {
+      if (await this.getPermissionDenial(info, user, msg)) {
         return {
           success: false,
           error: `You don't have permission to use '${commandName}'`,
@@ -494,11 +465,25 @@ export class CommandHandler {
     return isAdminConsideringAlt(user, msg);
   }
 
-  private async getUserRolesConsideringAlt(
+  private async hasActiveVIP(user: string): Promise<boolean> {
+    return (await VIPService.getInstance()).isVIP(user);
+  }
+
+  private async getPermissionDenial(
+    info: CommandInfo,
     user: string,
-    msg: proto.IWebMessageInfo,
-  ): Promise<string[]> {
-    return getUserRolesConsideringAlt(user, msg);
+    msg?: proto.IWebMessageInfo,
+    isVIP?: boolean,
+  ): Promise<"vip" | "role" | undefined> {
+    const needsVIP = info.vipOnly && !(isVIP ?? await this.hasActiveVIP(user));
+    const requiredRoles = info.requiredRoles ?? [];
+    if (!needsVIP && requiredRoles.length === 0) return;
+
+    const roles = await getUserRolesConsideringAlt(user, msg);
+    if (needsVIP && !roles.includes("admin")) return "vip";
+    if (requiredRoles.length > 0 && !requiredRoles.some((role) => roles.includes(role))) {
+      return "role";
+    }
   }
 
   private async handleGameCommand(

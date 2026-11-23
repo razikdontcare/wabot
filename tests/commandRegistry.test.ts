@@ -140,6 +140,70 @@ describe("CommandRegistryService", () => {
     expect(edited.category).toBe("utility");
   });
 
+  it("preserves edits to different fields from concurrent patches", async () => {
+    const { registry } = await createRegistry();
+    await registry.create({ name: "halo", description: "before", response: "Halo" }, "api");
+
+    await Promise.all([
+      registry.updateCustom("halo", { description: "after" }, "first"),
+      registry.updateCustom("halo", { enabled: false }, "second"),
+    ]);
+
+    expect(registry.getSync("halo")).toMatchObject({ description: "after", enabled: false });
+  });
+
+  it("rejects the second concurrent claim for an alias", async () => {
+    const { registry } = await createRegistry();
+    const definition = { aliases: ["hi"], description: "Sapaan", response: "Halo" };
+
+    const results = await Promise.allSettled([
+      registry.create({ ...definition, name: "halo" }, "first"),
+      registry.create({ ...definition, name: "hai" }, "second"),
+    ]);
+
+    expect(results[0].status).toBe("fulfilled");
+    expect(results[1]).toMatchObject({ status: "rejected", reason: expect.any(CommandConflictError) });
+    expect(registry.getSync("hi")?.name).toBe("halo");
+    expect(registry.getSync("hai")).toBeUndefined();
+  });
+
+  it("preserves the override when a default alias is taken and allows reset once it is free", async () => {
+    const { registry } = await createRegistry();
+    await registry.updateBuiltin("search", { aliases: [], enabled: false }, "api");
+    await registry.create({ name: "ws", description: "Sapaan", response: "Halo" }, "api");
+
+    await expect(registry.resetBuiltin("search", "api")).rejects.toBeInstanceOf(CommandConflictError);
+    expect(registry.getSync("search")).toMatchObject({ aliases: [], enabled: false });
+    expect(registry.getSync("ws")?.source).toBe("custom");
+
+    await registry.removeCustom("ws", "api");
+    await registry.resetBuiltin("search", "api");
+    expect(registry.getSync("ws")).toMatchObject({ name: "search", enabled: true });
+  });
+
+  it("reloads a persisted edit when its post-write refresh failed", async () => {
+    class InterruptedStore extends MemoryStore {
+      failNextRead = false;
+      async list() {
+        if (this.failNextRead) {
+          this.failNextRead = false;
+          throw new Error("temporary read failure");
+        }
+        return super.list();
+      }
+    }
+    const store = new InterruptedStore();
+    const { registry } = await createRegistry(store);
+    await registry.create({ name: "halo", description: "before", response: "Halo" }, "api");
+
+    store.failNextRead = true;
+    await expect(registry.updateCustom("halo", { description: "after" }, "api"))
+      .rejects.toBeInstanceOf(CommandStoreUnavailableError);
+    await registry.updateCustom("halo", { enabled: false }, "api");
+
+    expect(registry.getSync("halo")).toMatchObject({ description: "after", enabled: false });
+  });
+
   it("keeps built-ins usable when the store is unavailable", async () => {
     const registry = new CommandRegistryService(new BrokenStore(), async () => builtins);
     await registry.initialize();

@@ -126,6 +126,9 @@ export class CommandRegistryService implements CommandRegistry {
   private readonly builtinOverrides = new Map<string, StoredBuiltinOverride>();
   private readonly customRecords = new Map<string, StoredCustomCommand>();
   private readonly cacheTtlMs: number;
+  private builtins: CommandInfo[] = [];
+  private operations: Promise<void> = Promise.resolve();
+  private storeSnapshotValid = false;
   private loadedAt = 0;
   private refreshPromise: Promise<void> | null = null;
 
@@ -142,22 +145,25 @@ export class CommandRegistryService implements CommandRegistry {
    * bot down: built-in commands stay registered and writes surface the error.
    */
   async initialize(): Promise<void> {
-    try {
-      await this.store.ensureIndexes();
-    } catch (error) {
-      log.warn("Could not ensure command store indexes:", error);
-    }
+    return this.serialize(async () => {
+      try {
+        await this.store.ensureIndexes();
+      } catch (error) {
+        log.warn("Could not ensure command store indexes:", error);
+      }
 
-    try {
-      await this.refresh();
-    } catch (error) {
-      log.warn(
-        "Could not load stored commands; continuing with built-in commands only:",
-        error,
-      );
-      await this.buildViews([]);
-      this.loadedAt = Date.now();
-    }
+      try {
+        await this.refresh();
+      } catch (error) {
+        log.warn(
+          "Could not load stored commands; continuing with built-in commands only:",
+          error,
+        );
+        this.storeSnapshotValid = false;
+        await this.buildViews([]);
+        this.loadedAt = Date.now();
+      }
+    });
   }
 
   listSync(): RuntimeCommandInfo[] {
@@ -181,29 +187,32 @@ export class CommandRegistryService implements CommandRegistry {
     input: CreateCustomCommandInput,
     actor: string,
   ): Promise<RuntimeCommandInfo> {
-    const parsed = createCustomCommandSchema.safeParse(input);
-    if (!parsed.success) {
-      throw toValidationError(parsed.error);
-    }
+    return this.mutate(async () => {
+      const parsed = createCustomCommandSchema.safeParse(input);
+      if (!parsed.success) {
+        throw toValidationError(parsed.error);
+      }
 
-    const definition = parsed.data;
-    this.assertNameAvailable(definition.name);
-    this.assertAliasesAvailable(definition.aliases);
-    this.assertTemplateValid(definition.response);
+      const definition = parsed.data;
+      this.assertNameAvailable(definition.name);
+      this.assertAliasesAvailable(definition.aliases);
+      this.assertTemplateValid(definition.response);
 
-    const now = new Date();
-    const record: StoredCustomCommand = {
-      ...definition,
-      _id: `custom:${definition.name}`,
-      kind: "custom",
-      createdBy: actor,
-      createdAt: now,
-      updatedAt: now,
-      updatedBy: actor,
-    };
+      const now = new Date();
+      const record: StoredCustomCommand = {
+        ...definition,
+        _id: `custom:${definition.name}`,
+        kind: "custom",
+        createdBy: actor,
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: actor,
+      };
 
-    await this.write(() => this.store.upsert(record));
-    return this.requireView(definition.name);
+      await this.store.upsert(record);
+      await this.refresh();
+      return this.requireView(definition.name);
+    });
   }
 
   async updateCustom(
@@ -211,39 +220,42 @@ export class CommandRegistryService implements CommandRegistry {
     input: UpdateCustomCommandInput,
     actor: string,
   ): Promise<RuntimeCommandInfo> {
-    const canonicalName = normalizeName(name);
-    const existing = this.customRecords.get(canonicalName);
-    if (!existing) {
-      throw new CommandNotFoundError(name);
-    }
+    return this.mutate(async () => {
+      const canonicalName = normalizeName(name);
+      const existing = this.customRecords.get(canonicalName);
+      if (!existing) {
+        throw new CommandNotFoundError(name);
+      }
 
-    const parsed = updateCustomCommandSchema.safeParse(input);
-    if (!parsed.success) {
-      throw toValidationError(parsed.error);
-    }
+      const parsed = updateCustomCommandSchema.safeParse(input);
+      if (!parsed.success) {
+        throw toValidationError(parsed.error);
+      }
 
-    const updates = parsed.data;
-    if (updates.aliases !== undefined) {
-      this.assertAliasesAvailable(updates.aliases, canonicalName);
-    }
-    if (updates.response !== undefined) {
-      this.assertTemplateValid(updates.response);
-    }
+      const updates = parsed.data;
+      if (updates.aliases !== undefined) {
+        this.assertAliasesAvailable(updates.aliases, canonicalName);
+      }
+      if (updates.response !== undefined) {
+        this.assertTemplateValid(updates.response);
+      }
 
-    const record: StoredCustomCommand = {
-      ...existing,
-      ...updates,
-      _id: existing._id,
-      kind: "custom",
-      name: canonicalName,
-      createdBy: existing.createdBy,
-      createdAt: existing.createdAt,
-      updatedAt: new Date(),
-      updatedBy: actor,
-    };
+      const record: StoredCustomCommand = {
+        ...existing,
+        ...updates,
+        _id: existing._id,
+        kind: "custom",
+        name: canonicalName,
+        createdBy: existing.createdBy,
+        createdAt: existing.createdAt,
+        updatedAt: new Date(),
+        updatedBy: actor,
+      };
 
-    await this.write(() => this.store.upsert(record));
-    return this.requireView(canonicalName);
+      await this.store.upsert(record);
+      await this.refresh();
+      return this.requireView(canonicalName);
+    });
   }
 
   async updateBuiltin(
@@ -251,78 +263,87 @@ export class CommandRegistryService implements CommandRegistry {
     input: UpdateBuiltinCommandInput,
     actor: string,
   ): Promise<RuntimeCommandInfo> {
-    const canonicalName = normalizeName(name);
-    const info = this.views.get(canonicalName);
-    if (!info || info.source !== "builtin") {
-      throw new CommandNotFoundError(name);
-    }
-    if (isCoreCommandName(canonicalName)) {
-      throw new CommandConflictError(
-        `Core command "${canonicalName}" cannot be overridden`,
-      );
-    }
+    return this.mutate(async () => {
+      const canonicalName = normalizeName(name);
+      const info = this.views.get(canonicalName);
+      if (!info || info.source !== "builtin") {
+        throw new CommandNotFoundError(name);
+      }
+      if (isCoreCommandName(canonicalName)) {
+        throw new CommandConflictError(
+          `Core command "${canonicalName}" cannot be overridden`,
+        );
+      }
 
-    const parsed = updateBuiltinCommandSchema.safeParse(input);
-    if (!parsed.success) {
-      throw toValidationError(parsed.error);
-    }
+      const parsed = updateBuiltinCommandSchema.safeParse(input);
+      if (!parsed.success) {
+        throw toValidationError(parsed.error);
+      }
 
-    const updates = parsed.data;
-    if (updates.aliases !== undefined) {
-      this.assertAliasesAvailable(updates.aliases, canonicalName);
-    }
+      const updates = parsed.data;
+      if (updates.aliases !== undefined) {
+        this.assertAliasesAvailable(updates.aliases, canonicalName);
+      }
 
-    const existing = this.builtinOverrides.get(canonicalName);
-    const record: StoredBuiltinOverride = {
-      ...(existing ?? {
-        _id: `builtin:${canonicalName}`,
-        kind: "builtin" as const,
+      const existing = this.builtinOverrides.get(canonicalName);
+      const record: StoredBuiltinOverride = {
+        ...(existing ?? {
+          _id: `builtin:${canonicalName}`,
+          kind: "builtin" as const,
+          name: canonicalName,
+        }),
+        ...updates,
+        _id: existing?._id ?? `builtin:${canonicalName}`,
+        kind: "builtin",
         name: canonicalName,
-      }),
-      ...updates,
-      _id: existing?._id ?? `builtin:${canonicalName}`,
-      kind: "builtin",
-      name: canonicalName,
-      updatedAt: new Date(),
-      updatedBy: actor,
-    };
+        updatedAt: new Date(),
+        updatedBy: actor,
+      };
 
-    await this.write(() => this.store.upsert(record));
-    return this.requireView(canonicalName);
+      await this.store.upsert(record);
+      await this.refresh();
+      return this.requireView(canonicalName);
+    });
   }
 
   async removeCustom(name: string, _actor: string): Promise<void> {
-    const canonicalName = normalizeName(name);
-    const info = this.views.get(canonicalName);
-    if (!info) {
-      throw new CommandNotFoundError(name);
-    }
-    if (info.source === "builtin") {
-      throw new CommandConflictError(
-        `Built-in command "${canonicalName}" cannot be deleted; disable it instead`,
-      );
-    }
+    return this.mutate(async () => {
+      const canonicalName = normalizeName(name);
+      const info = this.views.get(canonicalName);
+      if (!info) {
+        throw new CommandNotFoundError(name);
+      }
+      if (info.source === "builtin") {
+        throw new CommandConflictError(
+          `Built-in command "${canonicalName}" cannot be deleted; disable it instead`,
+        );
+      }
 
-    await this.write(async () => {
       await this.store.delete(`custom:${canonicalName}`);
+      await this.refresh();
     });
   }
 
   async resetBuiltin(name: string, _actor: string): Promise<void> {
-    const canonicalName = normalizeName(name);
-    const info = this.views.get(canonicalName);
-    if (!info || info.source !== "builtin") {
-      throw new CommandNotFoundError(name);
-    }
+    return this.mutate(async () => {
+      const canonicalName = normalizeName(name);
+      const builtin = this.builtins.find(
+        (entry) => normalizeName(entry.name) === canonicalName,
+      );
+      if (!builtin) {
+        throw new CommandNotFoundError(name);
+      }
 
-    await this.write(async () => {
+      this.assertAliasesAvailable(normalizeAliases(builtin.aliases), canonicalName);
       await this.store.delete(`builtin:${canonicalName}`);
+      await this.refresh();
     });
   }
 
   private async refresh(): Promise<void> {
     const records = await this.store.list();
     await this.buildViews(records);
+    this.storeSnapshotValid = true;
     this.loadedAt = Date.now();
   }
 
@@ -338,7 +359,11 @@ export class CommandRegistryService implements CommandRegistry {
       return;
     }
 
-    this.refreshPromise = this.refresh()
+    this.refreshPromise = this.serialize(async () => {
+      if (Date.now() - this.loadedAt > this.cacheTtlMs) {
+        await this.refresh();
+      }
+    })
       .catch((error: unknown) => {
         log.warn("Failed to refresh the command registry:", error);
       })
@@ -350,6 +375,7 @@ export class CommandRegistryService implements CommandRegistry {
   private async buildViews(records: StoredCommandRecord[]): Promise<void> {
     const builtins = await this.loadBuiltins();
 
+    this.builtins = builtins;
     this.views.clear();
     this.aliasToName.clear();
     this.builtinOverrides.clear();
@@ -555,17 +581,33 @@ export class CommandRegistryService implements CommandRegistry {
     return view;
   }
 
-  /** Runs a store write, refreshes the cache, and maps failures to 503. */
-  private async write(operation: () => Promise<void>): Promise<void> {
-    try {
-      await operation();
-      await this.refresh();
-    } catch (error) {
-      if (error instanceof CommandStoreUnavailableError) {
-        throw error;
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operations.then(operation);
+    this.operations = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    return this.serialize(async () => {
+      try {
+        if (!this.storeSnapshotValid || Date.now() - this.loadedAt > this.cacheTtlMs) {
+          await this.refresh();
+        }
+        return await operation();
+      } catch (error) {
+        if (
+          error instanceof CommandValidationError ||
+          error instanceof CommandConflictError ||
+          error instanceof CommandNotFoundError
+        ) {
+          throw error;
+        }
+        // A write might have succeeded even if reloading its result failed.
+        this.storeSnapshotValid = false;
+        if (error instanceof CommandStoreUnavailableError) throw error;
+        log.error("Command store mutation failed:", error);
+        throw new CommandStoreUnavailableError();
       }
-      log.error("Command store write failed:", error);
-      throw new CommandStoreUnavailableError();
-    }
+    });
   }
 }

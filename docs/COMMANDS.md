@@ -89,6 +89,7 @@ Notes:
 
 - Saves refresh the in-process registry synchronously, so the bot answers with the new
   definition on the next message — no restart.
+- The edit form sends only fields that changed. The API reports invalid roles as validation errors.
 - The console renders every API string with `textContent` (never `innerHTML`); command names,
   descriptions and templates are displayed as text.
 - Built-in rows hide the custom-only fields (`response`, `category`); name editing is disabled
@@ -187,7 +188,8 @@ Not overridable: `name`, `response`, `category` and `vipBypassCooldown`. Audit f
 in `PublicCommandView`.
 
 **Reset** (`POST /api/commands/:name/reset`) deletes the `builtin:<name>` override document,
-restoring the code defaults. Deleting a built-in is refused (`409`) — disable it instead.
+restoring the code defaults. If another command uses an alias that reset would restore,
+the API returns `409` and keeps the override. Deleting a built-in is refused (`409`). You can disable it.
 
 ---
 
@@ -309,7 +311,7 @@ with `enabled: false` and its chat/AI dispatch returns the disabled result.
 
 Consequences:
 
-- On a single replica, a save is visible to the bot immediately (next message).
+- On a single replica, mutations run in sequence and each save is visible to the bot immediately.
 - With multiple replicas, another instance picks up the change within ~30 s, then on the next
   command lookup.
 - If Mongo is down at boot, built-in commands still load and the bot starts (a warning is

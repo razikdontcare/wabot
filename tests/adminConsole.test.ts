@@ -1,10 +1,16 @@
 import { describe, expect, it } from "bun:test";
+import { runInNewContext } from "node:vm";
+import {
+  updateBuiltinCommandSchema,
+  updateCustomCommandSchema,
+} from "../src/domain/models/CommandDefinition.js";
 import { ADMIN_CONSOLE_COMMANDS_BODY } from "../src/infrastructure/web/adminConsoleCommandsBody.js";
 import { ADMIN_CONSOLE_COMMANDS_SCRIPT } from "../src/infrastructure/web/adminConsoleCommandsScript.js";
 import { ADMIN_CONSOLE_COMMANDS_STYLES } from "../src/infrastructure/web/adminConsoleCommandsStyles.js";
 import { renderAdminConsoleHtml } from "../src/infrastructure/web/adminConsolePage.js";
 import { ADMIN_CONSOLE_SCRIPT } from "../src/infrastructure/web/adminConsoleScript.js";
 import { ADMIN_CONSOLE_STYLES } from "../src/infrastructure/web/adminConsoleStyles.js";
+import type { PublicCommandView } from "../src/infrastructure/web/commandRoutes.js";
 
 // Contract shared with the command management script (Plan Task 10): every
 // element the script queries by id must exist in the rendered page.
@@ -35,6 +41,23 @@ const COMMAND_CONSOLE_IDS = [
   "cmdFormFeedback",
   "cancelCommandBtn",
 ] as const;
+
+function editPayload(command: Partial<PublicCommandView> & { name: string }, fields: Record<string, string>): unknown {
+  const inputs = new Map<string, { value: string; closest: () => null }>(
+    COMMAND_CONSOLE_IDS.filter((id) => id.startsWith("cmd")).map((id) => [
+      id, { value: "", closest: () => null },
+    ]),
+  );
+  const script = ADMIN_CONSOLE_COMMANDS_SCRIPT.replace("bootstrap();", `
+    state.commands = [command];
+    openEdit(command.name);
+    for (const [id, value] of Object.entries(fields)) document.getElementById(id).value = value;
+    globalThis.payload = buildPayload();
+  `);
+  const page = { command, fields, document: { getElementById: (id: string) => inputs.get(id) }, payload: undefined };
+  runInNewContext(script, page);
+  return page.payload;
+}
 
 describe("admin console commands section", () => {
   it("is reachable from the navigation and present in the rendered page", () => {
@@ -94,5 +117,25 @@ describe("admin console commands script", () => {
     expect(script).toMatch(
       /payload\.response = ui\.cmdResponse \? ui\.cmdResponse\.value : '';/,
     );
+  });
+
+  it("omits unchanged built-in fields, including the seven default downloader aliases", () => {
+    const payload = editPayload({
+      name: "downloader", source: "builtin", description: "Download media", enabled: true,
+      aliases: ["dl", "download", "yt", "youtube", "dla", "d", "ytdl"],
+    }, { cmdDescription: "Download video" });
+
+    expect(payload).toEqual({ description: "Download video" });
+    expect(updateBuiltinCommandSchema.safeParse(payload).success).toBe(true);
+  });
+
+  it("sends misspelled roles to validation instead of clearing access restrictions", () => {
+    const payload = editPayload({
+      name: "halo", source: "custom", description: "Sapaan", enabled: true,
+      response: "Halo", requiredRoles: ["admin"],
+    }, { cmdRequiredRoles: "admn" });
+
+    expect(payload).toEqual({ requiredRoles: ["admn"] });
+    expect(updateCustomCommandSchema.safeParse(payload).success).toBe(false);
   });
 });

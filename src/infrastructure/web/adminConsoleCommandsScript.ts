@@ -32,8 +32,6 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
         saveCommandBtn: document.getElementById('saveCommandBtn'),
       };
 
-      const COMMAND_ROLES = ['admin', 'moderator', 'vip'];
-
       function setText(node, value) {
         if (node) node.textContent = String(value);
       }
@@ -310,7 +308,6 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
         const command = state.commands.find((entry) => entry.name === name);
         if (!command) return;
 
-        state.editing = command;
         if (ui.commandForm) ui.commandForm.reset();
         if (ui.commandFormPanel) ui.commandFormPanel.hidden = false;
         if (ui.commandFormTitle) ui.commandFormTitle.textContent = 'Edit ' + command.name;
@@ -331,6 +328,7 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
         setChecked(ui.cmdVipOnly, command.vipOnly);
         setChecked(ui.cmdEnabled, command.enabled);
 
+        state.editing = { name: command.name, source: command.source, initialPayload: readForm(command) };
         applyFormMode(command);
         setFormFeedback(
           command.source === 'builtin'
@@ -363,15 +361,13 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
         return Number.isFinite(parsed) ? parsed : undefined;
       }
 
-      function buildPayload() {
+      function readForm(editing) {
         const payload = {
           aliases: splitList(ui.cmdAliases ? ui.cmdAliases.value : ''),
           description: ui.cmdDescription ? ui.cmdDescription.value.trim() : '',
           enabled: ui.cmdEnabled ? ui.cmdEnabled.checked : true,
           vipOnly: ui.cmdVipOnly ? ui.cmdVipOnly.checked : false,
-          requiredRoles: splitList(ui.cmdRequiredRoles ? ui.cmdRequiredRoles.value : '').filter(
-            (role) => COMMAND_ROLES.indexOf(role) !== -1,
-          ),
+          requiredRoles: splitList(ui.cmdRequiredRoles ? ui.cmdRequiredRoles.value : ''),
         };
 
         const cooldown = readNumber(ui.cmdCooldown);
@@ -382,9 +378,9 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
 
         const helpText = ui.cmdHelpText ? ui.cmdHelpText.value.trim() : '';
         if (helpText) payload.helpText = helpText;
-        else if (state.editing) payload.helpText = '';
+        else if (editing) payload.helpText = '';
 
-        const isBuiltin = state.editing && state.editing.source === 'builtin';
+        const isBuiltin = editing && editing.source === 'builtin';
         if (isBuiltin) {
           payload.disabledReason = ui.cmdDisabledReason ? ui.cmdDisabledReason.value.trim() : '';
         } else {
@@ -392,11 +388,21 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
           payload.response = ui.cmdResponse ? ui.cmdResponse.value : '';
         }
 
-        if (!state.editing) {
+        if (!editing) {
           payload.name = ui.cmdName ? ui.cmdName.value.trim().toLowerCase() : '';
         }
 
         return payload;
+      }
+
+      function buildPayload() {
+        const editing = state.editing;
+        const payload = readForm(editing);
+        if (!editing) return payload;
+
+        return Object.fromEntries(Object.entries(payload).filter(([field, value]) =>
+          JSON.stringify(value) !== JSON.stringify(editing.initialPayload[field]),
+        ));
       }
 
       async function submitForm(event) {
@@ -404,6 +410,10 @@ export const ADMIN_CONSOLE_COMMANDS_SCRIPT = `(() => {
 
         const payload = buildPayload();
         const editingName = state.editing ? state.editing.name : '';
+        if (state.editing && Object.keys(payload).length === 0) {
+          setFormFeedback('No changes to save.', false);
+          return;
+        }
 
         if (ui.saveCommandBtn) ui.saveCommandBtn.disabled = true;
         setFormFeedback('Saving...', false);
