@@ -10,13 +10,13 @@ import { VIPService } from "../../domain/services/VIPService.js";
 import { UserPreferenceService } from "../../domain/services/UserPreferenceService.js";
 import { WebSocketInfo } from "../../shared/types/types.js";
 import { SessionService } from "../../domain/services/SessionService.js";
-import { join } from "path";
 import extractUrlsFromText from "../../shared/utils/extractUrlsFromText.js";
 import {
   createFetchClient,
   isFetchError,
 } from "../../shared/utils/fetchClient.js";
 import { WorkerPool } from "../../shared/utils/WorkerPool.js";
+import { resolveSourceModule } from "../../shared/utils/sourcePaths.js";
 import type { Logger } from "pino";
 
 // Type definitions
@@ -569,12 +569,8 @@ export class StickerCommand extends CommandInterface {
       const workerPool = WorkerPool.getInstance();
 
       // Use helper to get the correct path for worker in both dev and prod
-      const getProcessorPath = () => {
-        if (process.env.NODE_ENV === "production" || process.env.USE_DIST) {
-          return join(process.cwd(), "dist", "shared", "utils", "stickerProcessor.js");
-        }
-        return join(process.cwd(), "src", "shared", "utils", "stickerProcessor.ts");
-      };
+      const getProcessorPath = () =>
+        resolveSourceModule("shared", "utils", "stickerProcessor.ts");
 
       const processorPath = getProcessorPath();
 

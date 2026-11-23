@@ -133,6 +133,14 @@ export class BotClient {
 
         const { state } = this.authState;
 
+        this.commandHandler = new CommandHandler(
+          this.sessionService,
+          this.usageService,
+        );
+        await this.commandHandler.waitForInitialization();
+        setCommandHandler(this.commandHandler);
+        log.info("CommandHandler re-initialized successfully");
+
         // Create a new socket connection
         this.sock = makeWASocket({
           auth: state,
@@ -174,10 +182,6 @@ export class BotClient {
         });
 
         this.botId = this.sock.authState.creds.me?.id.split(":")[0] || null;
-        this.commandHandler = new CommandHandler(
-          this.sessionService,
-          this.usageService,
-        );
 
         // this.store.bind(this.sock.ev);
       } catch (error) {

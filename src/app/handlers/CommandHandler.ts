@@ -1,6 +1,8 @@
 import { CommandInfo, CommandInterface } from "./CommandInterface.js";
+import { DynamicCommand } from "./DynamicCommand.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import { CommandUsageService } from "../../domain/services/CommandUsageService.js";
+import { VIPService } from "../../domain/services/VIPService.js";
 import {
   getCurrentConfig,
   log,
@@ -18,17 +20,15 @@ import {
 } from "../../shared/utils/userRoles.js";
 import { proto } from "baileys";
 import os from "os";
-
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { getCommandRegistry } from "../../infrastructure/config/commandRegistry.js";
+import type {
+  CommandRegistry,
+  RuntimeCommandInfo,
+} from "../../domain/services/CommandRegistryService.js";
 
 export class CommandHandler {
-  private commands: Map<string, CommandInfo> = new Map();
-  private aliases: Map<string, string> = new Map();
+  private registry: CommandRegistry | null = null;
+  private readonly registryPromise: Promise<CommandRegistry>;
   private cooldownManager: CooldownManager = new CooldownManager();
   private initialized: boolean = false;
   private initializationPromise: Promise<void>;
@@ -36,9 +36,25 @@ export class CommandHandler {
   constructor(
     private sessionService: SessionService,
     private usageService?: CommandUsageService,
+    options: {
+      registry?: CommandRegistry;
+      sessionCleanupIntervalMs?: number;
+    } = {},
   ) {
+    this.registryPromise = options.registry
+      ? Promise.resolve(options.registry)
+      : getCommandRegistry();
+
+    const sessionCleanupIntervalMs =
+      options.sessionCleanupIntervalMs ?? 1800000; // 30 minutes
+    if (sessionCleanupIntervalMs > 0) {
+      setInterval(
+        () => this.sessionService.cleanupExpiredSessions(),
+        sessionCleanupIntervalMs,
+      );
+    }
+
     this.initializationPromise = this.initialize();
-    setInterval(() => this.sessionService.cleanupExpiredSessions(), 1800000); // 30 minutes
   }
 
   async waitForInitialization(): Promise<void> {
@@ -47,55 +63,6 @@ export class CommandHandler {
 
   isInitialized(): boolean {
     return this.initialized;
-  }
-
-  async registerCommands() {
-    const commandsDir = path.resolve(__dirname, "../commands");
-
-    // Check if we're in development (TypeScript) or production (JavaScript)
-    const isDev = process.env.NODE_ENV !== "production";
-    const fileExtension = isDev ? ".ts" : ".js";
-
-    let files: string[] = [];
-    try {
-      files = fs
-        .readdirSync(commandsDir)
-        .filter((f) => f.endsWith(fileExtension));
-    } catch (_error) {
-      // If no files found with one extension, try the other
-      const altExtension = isDev ? ".js" : ".ts";
-      try {
-        files = fs
-          .readdirSync(commandsDir)
-          .filter((f) => f.endsWith(altExtension));
-      } catch (_altError) {
-        log.error(`No command files found in ${commandsDir}`);
-        return;
-      }
-    }
-
-    log.info(`Loading ${files.length} command files from ${commandsDir}`);
-
-    for (const file of files) {
-      try {
-        const commandModule = await import(path.join(commandsDir, file));
-        // Support both default and named exports
-        const CommandClass =
-          commandModule.default || Object.values(commandModule)[0];
-        if (!CommandClass || !CommandClass.commandInfo) {
-          log.warn(
-            `Command file ${file} does not export a valid command class`,
-          );
-          continue;
-        }
-        this.registerCommand(CommandClass.commandInfo);
-        log.debug(`Registered command: ${CommandClass.commandInfo.name}`);
-      } catch (error) {
-        log.error(`Failed to load command from ${file}:`, error);
-      }
-    }
-
-    log.info(`Successfully registered ${this.commands.size} commands`);
   }
 
   async isCommand(text: string): Promise<boolean> {
@@ -182,43 +149,22 @@ export class CommandHandler {
           return;
         }
 
-        // Check VIP status
-        const { VIPService } = await import(
-          "../../domain/services/VIPService.js"
-        );
-        const vipService = await VIPService.getInstance();
-        const isVIP = await vipService.isVIP(user);
-
-        // VIP-only command check
-        if (commandInfo.vipOnly && !isVIP) {
-          const userRoles = await this.getUserRolesConsideringAlt(user, msg);
-          const isAdmin = userRoles.includes("admin");
-          if (!isAdmin) {
-            await sock.sendMessage(jid, {
-              text: `${config.emoji.error} Perintah ini hanya untuk VIP members! 👑\n\nGunakan !vip info untuk mengetahui cara mendapatkan VIP.`,
-            });
-            return;
-          }
-        }
-
-        // Permission check for requiredRoles considering both LID/PN
-        if (commandInfo.requiredRoles && commandInfo.requiredRoles.length > 0) {
-          const userRoles = await this.getUserRolesConsideringAlt(user, msg);
-          const hasRole = commandInfo.requiredRoles.some((role) =>
-            userRoles.includes(role),
-          );
-          if (!hasRole) {
-            await sock.sendMessage(jid, {
-              text: `${config.emoji.error} Kamu tidak memiliki izin untuk menggunakan perintah ini.`,
-            });
-            return;
-          }
+        const vipBypassCooldown = commandInfo.vipBypassCooldown === true;
+        const isVIP = commandInfo.vipOnly || (commandInfo.cooldown && vipBypassCooldown)
+          ? await this.hasActiveVIP(user)
+          : false;
+        const denial = await this.getPermissionDenial(commandInfo, user, msg, isVIP);
+        if (denial) {
+          const reason = denial === "vip"
+            ? "Perintah ini hanya untuk VIP members! 👑\n\nGunakan !vip info untuk mengetahui cara mendapatkan VIP."
+            : "Kamu tidak memiliki izin untuk menggunakan perintah ini.";
+          await sock.sendMessage(jid, { text: `${config.emoji.error} ${reason}` });
+          return;
         }
 
         const actualCommand = commandInfo.name;
 
         // Cooldown check - VIP users bypass cooldown only if explicitly enabled
-        const vipBypassCooldown = commandInfo.vipBypassCooldown === true; // Explicit opt-in
         const shouldCheckCooldown =
           commandInfo.cooldown && !(isVIP && vipBypassCooldown);
 
@@ -310,11 +256,11 @@ export class CommandHandler {
 
   // Methods for AI command access
   getAllCommands(): CommandInfo[] {
-    return Array.from(this.commands.values());
+    return this.registry?.listSync() ?? [];
   }
 
   getCommandsByCategory(category: CommandInfo["category"]): CommandInfo[] {
-    return Array.from(this.commands.values()).filter(
+    return (this.registry?.listSync() ?? []).filter(
       (cmd) => cmd.category === category,
     );
   }
@@ -336,16 +282,7 @@ export class CommandHandler {
     const info = this.getCommandInfo(name);
     if (!info || info.disabled) return false;
 
-    // Check permissions
-    if (info.requiredRoles && info.requiredRoles.length > 0) {
-      const userRoles = await getUserRolesConsideringAlt(user, msg);
-      const hasRole = info.requiredRoles.some((role) =>
-        userRoles.includes(role),
-      );
-      if (!hasRole) return false;
-    }
-
-    return true;
+    return !(await this.getPermissionDenial(info, user, msg));
   }
 
   async executeCommandForAI(
@@ -375,7 +312,7 @@ export class CommandHandler {
       }
 
       // Check permissions
-      if (!(await this.canUserExecuteCommand(commandName, user, msg))) {
+      if (await this.getPermissionDenial(info, user, msg)) {
         return {
           success: false,
           error: `You don't have permission to use '${commandName}'`,
@@ -471,48 +408,29 @@ export class CommandHandler {
   }
 
   private async initialize(): Promise<void> {
-    await this.registerCommands();
+    const registry = await this.registryPromise;
+    this.registry = registry;
+    await registry.initialize();
     this.initialized = true;
+    log.info(`Successfully registered ${this.getAllCommands().length} commands`);
   }
 
-  private registerCommand(info: CommandInfo): void {
-    this.commands.set(info.name.toLowerCase(), info);
-
-    if (info.aliases) {
-      for (const alias of info.aliases) {
-        this.aliases.set(alias.toLowerCase(), info.name.toLowerCase());
-      }
-    }
-  }
-
-  private isGameCommand(command: string): boolean {
-    const info = this.getCommandInfo(command);
-    return info ? info.category === "game" : false;
-  }
-
-  private isGeneralCommand(command: string): boolean {
-    const info = this.getCommandInfo(command);
-    return info ? info.category === "general" : false;
-  }
-
-  private isAdminCommand(command: string): boolean {
-    const info = this.getCommandInfo(command);
-    return info ? info.category === "admin" : false;
-  }
-
-  private getCommandInfo(command: string): CommandInfo | undefined {
-    // Check if it's an alias first
-    const actualCommand = this.aliases.has(command)
-      ? this.aliases.get(command)!
-      : command;
-
-    return this.commands.get(actualCommand);
+  private getCommandInfo(command: string): RuntimeCommandInfo | undefined {
+    return this.registry?.getSync(command.toLowerCase());
   }
 
   private getCommandInstance(command: string): CommandInterface {
     const info = this.getCommandInfo(command);
     if (!info) {
       throw new Error(`Command not found: ${command}`);
+    }
+
+    if (info.customDefinition) {
+      return new DynamicCommand(info.customDefinition);
+    }
+
+    if (!info.commandClass) {
+      throw new Error(`Command '${command}' has no command class registered`);
     }
 
     return new info.commandClass();
@@ -547,11 +465,25 @@ export class CommandHandler {
     return isAdminConsideringAlt(user, msg);
   }
 
-  private async getUserRolesConsideringAlt(
+  private async hasActiveVIP(user: string): Promise<boolean> {
+    return (await VIPService.getInstance()).isVIP(user);
+  }
+
+  private async getPermissionDenial(
+    info: CommandInfo,
     user: string,
-    msg: proto.IWebMessageInfo,
-  ): Promise<string[]> {
-    return getUserRolesConsideringAlt(user, msg);
+    msg?: proto.IWebMessageInfo,
+    isVIP?: boolean,
+  ): Promise<"vip" | "role" | undefined> {
+    const needsVIP = info.vipOnly && !(isVIP ?? await this.hasActiveVIP(user));
+    const requiredRoles = info.requiredRoles ?? [];
+    if (!needsVIP && requiredRoles.length === 0) return;
+
+    const roles = await getUserRolesConsideringAlt(user, msg);
+    if (needsVIP && !roles.includes("admin")) return "vip";
+    if (requiredRoles.length > 0 && !requiredRoles.some((role) => roles.includes(role))) {
+      return "role";
+    }
   }
 
   private async handleGameCommand(
@@ -656,7 +588,7 @@ export class CommandHandler {
   }
 
   private async listGames(jid: string, sock: WebSocketInfo) {
-    const gameCommands = Array.from(this.commands.values()).filter(
+    const gameCommands = (this.registry?.listSync() ?? []).filter(
       (cmd) => cmd.category === "game",
     );
 
@@ -711,8 +643,9 @@ export class CommandHandler {
       const adminCommands: string[] = [];
       const utilityCommands: string[] = [];
 
-      for (const [_cmdName, info] of this.commands) {
-        const commandText = `*${config.prefix}${info.name}* - ${info.description}`;
+      for (const info of this.registry?.listSync() ?? []) {
+        const statusSuffix = info.disabled ? " (nonaktif)" : "";
+        const commandText = `*${config.prefix}${info.name}* - ${info.description}${statusSuffix}`;
 
         switch (info.category) {
           case "game":

@@ -6,4 +6,15 @@ npm-debug.log
 .gitignore
 README.md
 .env
+.env.example
 *.log
+dist
+tests
+docs
+.agents
+.idea
+SYSTEM_MAP.md
+eslint.config.js
+nodemon.json
+tsconfig.json
+test*.ts

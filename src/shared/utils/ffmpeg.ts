@@ -1,8 +1,11 @@
-import {spawn} from 'child_process';
+import {execFile, spawn} from 'child_process';
 import {promises as fs} from 'fs';
 import {tmpdir} from 'os';
-import {join} from 'path';
+import {extname, join} from 'path';
 import {randomUUID} from 'crypto';
+import {promisify} from 'util';
+
+const execFileAsync = promisify(execFile);
 
 interface ConversionOptions {
     /**
@@ -13,6 +16,59 @@ interface ConversionOptions {
      * FFmpeg binary path (default: 'ffmpeg')
      */
     ffmpegPath?: string;
+}
+
+interface VideoProbe {
+    format: { format_name: string };
+    streams: {
+        codec_type: string;
+        codec_name: string;
+        profile?: string;
+        pix_fmt?: string;
+        has_b_frames?: number;
+    }[];
+}
+
+export async function prepareWhatsAppVideo(inputPath: string): Promise<{
+    filePath: string;
+    size: number;
+    cleanup: () => Promise<void>;
+} | undefined> {
+    const {stdout} = await execFileAsync('ffprobe', [
+        '-v', 'error', '-show_entries',
+        'format=format_name:stream=codec_type,codec_name,profile,pix_fmt,has_b_frames',
+        '-of', 'json', inputPath,
+    ], {timeout: 30_000});
+    const {format, streams} = JSON.parse(stdout) as VideoProbe;
+    const videos = streams.filter(stream => stream.codec_type === 'video');
+    const audio = streams.filter(stream => stream.codec_type === 'audio');
+    const [video] = videos;
+    if (!video) throw new Error('Downloaded file contains no video stream');
+
+    const compatibleProfile = ['Baseline', 'Constrained Baseline', 'Main'].includes(video.profile ?? '') ||
+        (video.profile === 'High' && video.has_b_frames === 0);
+    if (extname(inputPath).toLowerCase() === '.mp4' && format.format_name.split(',').includes('mp4') &&
+        videos.length === 1 && video.codec_name === 'h264' && video.pix_fmt === 'yuv420p' && compatibleProfile &&
+        audio.length <= 1 && audio.every(stream => stream.codec_name === 'aac')) {
+        return;
+    }
+
+    const filePath = join(tmpdir(), `whatsapp_video_${randomUUID()}.mp4`);
+    const cleanup = () => fs.unlink(filePath).catch(() => {});
+    try {
+        await executeFFmpeg('ffmpeg', [
+            '-v', 'error', '-nostdin', '-xerror', '-i', inputPath,
+            '-map', '0:V:0', '-map', '0:a:0?',
+            '-vf', 'scale=ceil(iw/2)*2:ceil(ih/2)*2',
+            '-c:v', 'libx264', '-profile:v', 'baseline', '-pix_fmt', 'yuv420p', '-preset', 'veryfast',
+            '-c:a', 'aac', '-profile:a', 'aac_low', '-ac', '2', '-movflags', '+faststart', filePath,
+        ], 300_000);
+        const {size} = await fs.stat(filePath);
+        return {filePath, size, cleanup};
+    } catch (error) {
+        await cleanup();
+        throw error;
+    }
 }
 
 /**
@@ -131,6 +187,11 @@ function executeFFmpeg(ffmpegPath: string, args: string[], timeout: number): Pro
 
         let _stdout = '';
         let stderr = '';
+        let timedOut = false;
+        const timeoutId = setTimeout(() => {
+            timedOut = true;
+            process.kill('SIGKILL');
+        }, timeout);
 
         // Collect output
         process.stdout?.on('data', (data) => {
@@ -143,7 +204,10 @@ function executeFFmpeg(ffmpegPath: string, args: string[], timeout: number): Pro
 
         // Handle process completion
         process.on('close', (code) => {
-            if (code === 0) {
+            clearTimeout(timeoutId);
+            if (timedOut) {
+                reject(new Error(`FFmpeg process timed out after ${timeout}ms`));
+            } else if (code === 0) {
                 resolve();
             } else {
                 reject(new Error(`FFmpeg process exited with code ${code}. stderr: ${stderr}`));
@@ -152,18 +216,8 @@ function executeFFmpeg(ffmpegPath: string, args: string[], timeout: number): Pro
 
         // Handle process errors
         process.on('error', (error) => {
-            reject(new Error(`Failed to start FFmpeg process: ${error.message}`));
-        });
-
-        // Handle timeout
-        const timeoutId = setTimeout(() => {
-            process.kill('SIGKILL');
-            reject(new Error(`FFmpeg process timed out after ${timeout}ms`));
-        }, timeout);
-
-        // Clear timeout when process completes
-        process.on('close', () => {
             clearTimeout(timeoutId);
+            reject(new Error(`Failed to start FFmpeg process: ${error.message}`));
         });
     });
 }

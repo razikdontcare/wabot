@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "bun run dist/index.js",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "test:migration:askai": "bun run test-askai-migration.ts",
     "test:nexa:providers": "bun run test-nexa-providers.ts",
     "lint": "eslint src/**/*.ts",

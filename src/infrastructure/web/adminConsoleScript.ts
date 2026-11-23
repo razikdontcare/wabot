@@ -845,6 +845,8 @@ export const ADMIN_CONSOLE_SCRIPT = `(() => {
           loadConfig(),
           loadLogs(),
         ]);
+
+        window.dispatchEvent(new Event('admin:refresh'));
       }
 
       async function bootstrap() {

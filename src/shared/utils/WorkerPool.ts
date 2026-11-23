@@ -1,7 +1,7 @@
 import { Worker } from 'worker_threads';
-import { join } from 'path';
 import { log } from '../../infrastructure/config/config.js';
 import { randomUUID } from 'crypto';
+import { resolveWorkerScriptPath } from './sourcePaths.js';
 
 interface Task<T = unknown> {
   id: string;
@@ -29,13 +29,9 @@ export class WorkerPool {
 
   private constructor(maxWorkers: number = 4) {
     this.maxWorkers = maxWorkers;
-    // Use the compiled JS file path
-    this.workerPath = join(process.cwd(), 'dist', 'shared', 'utils', 'worker.js');
-    
-    // In dev mode (Bun), we might need to point to the TS file
-    if (process.env.NODE_ENV !== 'production' && !process.env.USE_DIST) {
-        this.workerPath = join(process.cwd(), 'src', 'shared', 'utils', 'worker.ts');
-    }
+    // Worker threads load the TypeScript sources directly: the runtime image
+    // ships `src/` and has no compiled `dist/` build.
+    this.workerPath = resolveWorkerScriptPath();
   }
 
   public static getInstance(): WorkerPool {
