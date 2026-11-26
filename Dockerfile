@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
-FROM oven/bun:1.3.14-alpine AS deps
+FROM oven/bun:1.4.5-alpine AS deps
 RUN apk add --no-cache bash curl build-base python3 vips-dev
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
-FROM oven/bun:1.3.14-alpine AS runtime
+FROM oven/bun:1.4.5-alpine AS runtime
 RUN apk add --no-cache vips-dev ffmpeg python3 py3-pip curl ca-certificates aria2 fontconfig font-dejavu 'nodejs>=22'
 RUN python3 -m venv /opt/yt-dlp-venv \
     && /opt/yt-dlp-venv/bin/pip install -U --pre --no-cache-dir "yt-dlp[default,curl-cffi]" \

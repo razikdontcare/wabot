@@ -1,13 +1,16 @@
 import sharp from "sharp";
-import { spawn } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promises as fs } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { promisify } from "util";
 import webpmux from "node-webpmux";
 import { log } from "../../infrastructure/config/config.js";
 
 const STICKER_SIZE = 512;
+const MAX_STICKER_DURATION_SECONDS = 10;
+const execFileAsync = promisify(execFile);
 
 const RIFF_HEADER_SIZE = 12;
 const ANMF_HEADER_SIZE = 16;
@@ -124,22 +127,25 @@ export function normalizeStickerWebp(input: Uint8Array): Uint8Array {
 }
 
 /**
- * Add EXIF metadata to WebP buffer for WhatsApp Sticker packname and authorname.
+ * Add pack metadata and the optional sound hash to a WhatsApp sticker.
  */
 export async function addExif(
   webpBuffer: Uint8Array,
   packname: string,
   author: string,
+  soundSha256?: string,
 ): Promise<Uint8Array> {
   try {
+    const source = Buffer.from(webpBuffer);
     const img = new webpmux.Image();
-    await img.load(Buffer.from(webpBuffer));
+    await img.load(source);
 
     const json = {
       "sticker-pack-id": "whatsapp-funbot",
       "sticker-pack-name": packname,
       "sticker-pack-publisher": author,
       emojis: ["✨"],
+      ...(soundSha256 && { "sound-sha256": soundSha256 }),
     };
 
     const exifAttr = Buffer.from([
@@ -152,11 +158,15 @@ export async function addExif(
 
     img.exif = exif;
 
-    const result = await img.save(null);
+    // libwebp can collapse identical video frames to a still WebP.
+    const result = soundSha256 && !img.hasAnim
+      ? await img.save(null, { frames: [{ buffer: source }], delay: 1000 })
+      : await img.save(null);
     // Re-muxing drops the VP8X alpha flag of animations, restore it before
     // the sticker is sent (WhatsApp Web needs it to keep transparency).
     return normalizeStickerWebp(new Uint8Array(result));
   } catch (error) {
+    if (soundSha256) throw error;
     log.warn("Failed to add EXIF to sticker:", error);
     return normalizeStickerWebp(webpBuffer); // Return original if failed
   }
@@ -263,7 +273,7 @@ export async function createAnimatedSticker(
       "-i",
       inputPath,
       "-t",
-      "10",
+      String(MAX_STICKER_DURATION_SECONDS),
       "-vf",
       vf,
       "-vsync",
@@ -299,6 +309,41 @@ export async function createAnimatedSticker(
   }
 }
 
+export async function extractStickerAudio(
+  videoBuffer: Uint8Array,
+): Promise<Uint8Array | null> {
+  const tempBase = join(tmpdir(), `sticker_audio_${randomUUID()}`);
+  const inputPath = `${tempBase}.video`;
+  const outputPath = `${tempBase}.ogg`;
+
+  try {
+    await fs.writeFile(inputPath, videoBuffer);
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=index",
+      "-of", "csv=p=0",
+      inputPath,
+    ], { timeout: 30_000 });
+    if (!stdout.trim()) return null;
+
+    await executeFFmpeg([
+      "-i", inputPath,
+      "-map", "0:a:0",
+      "-vn",
+      "-t", String(MAX_STICKER_DURATION_SECONDS),
+      "-c:a", "libopus",
+      "-ar", "48000",
+      "-ac", "1",
+      "-b:a", "64k",
+      outputPath,
+    ]);
+    return new Uint8Array(await fs.readFile(outputPath));
+  } finally {
+    await Promise.allSettled([fs.unlink(inputPath), fs.unlink(outputPath)]);
+  }
+}
+
 function executeFFmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const process = spawn("ffmpeg", args, {
@@ -311,15 +356,17 @@ function executeFFmpeg(args: string[]): Promise<void> {
     });
 
     process.on("close", (code) => {
+      clearTimeout(timeout);
       if (code === 0) resolve();
       else reject(new Error(`FFmpeg exited with code ${code}: ${stderr}`));
     });
 
     process.on("error", (error) => {
+      clearTimeout(timeout);
       reject(new Error(`FFmpeg error: ${error.message}`));
     });
 
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       process.kill("SIGKILL");
       reject(new Error("FFmpeg timeout"));
     }, 30000);

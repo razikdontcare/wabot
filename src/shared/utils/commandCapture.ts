@@ -113,6 +113,13 @@ export function createCommandCapture(
           return result;
         };
       }
+      if (property === "relayMessage") {
+        return async (...args: Parameters<WebSocketInfo["relayMessage"]>) => {
+          const messageId = await target.relayMessage(...args);
+          if (args[1].stickerMessage) messages.push({ kind: "sticker", messageId });
+          return messageId;
+        };
+      }
 
       const value = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
