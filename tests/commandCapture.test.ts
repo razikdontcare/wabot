@@ -21,6 +21,10 @@ function createFakeSocket() {
       calls.push({ jid, content, options });
       return { key: { id: `msg-${calls.length}`, remoteJid: jid, fromMe: true } };
     },
+    relayMessage: async (jid: string, content: Record<string, unknown>, options?: unknown) => {
+      calls.push({ jid, content, options });
+      return `msg-${calls.length}`;
+    },
     updateMediaMessage: async () => undefined,
   };
 
@@ -60,6 +64,18 @@ describe("createCommandCapture", () => {
     expect(capture.messages[0].kind).toBe("sticker");
     expect(capture.messages[1].kind).toBe("image");
     expect(capture.messages[1].caption).toBe("hasil gambar");
+  });
+
+  it("captures a relayed sticker as the command's sticker output", async () => {
+    const { socket, calls } = createFakeSocket();
+    const capture = createCommandCapture(socket);
+    const jid = "jid@s.whatsapp.net";
+    const message = { stickerMessage: { isAnimated: true } };
+
+    await capture.socket.relayMessage(jid, message, {});
+
+    expect(calls[0].content).toEqual(message);
+    expect(capture.messages).toEqual([{ kind: "sticker", messageId: "msg-1" }]);
   });
 
   it("merges an edit into the captured message instead of duplicating it", async () => {

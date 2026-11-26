@@ -17,6 +17,8 @@ import {
 } from "../../shared/utils/fetchClient.js";
 import { WorkerPool } from "../../shared/utils/WorkerPool.js";
 import { resolveSourceModule } from "../../shared/utils/sourcePaths.js";
+import { sendSoundSticker } from "../../shared/utils/soundSticker.js";
+import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 
 // Type definitions
@@ -40,6 +42,7 @@ export class StickerCommand extends CommandInterface {
 
 *Opsi:*
 • *${BotConfig.prefix}sticker --crop* — Crop ke tengah (512x512)
+• *${BotConfig.prefix}sticker --audio* — Buat sticker bersuara dari video dengan audio
 • Default: auto-fit dengan padding putih
 
 *Batasan:*
@@ -67,6 +70,7 @@ export class StickerCommand extends CommandInterface {
   };
 
   private readonly MAX_FILE_SIZE = 16 * 1024 * 1024; // 16MB
+  private readonly MAX_SOUND_STICKER_BYTES = 950_000;
   private readonly STICKER_SIZE = 512;
   private readonly URL_FETCH_TIMEOUT = 20000;
   private readonly MAX_REDIRECT_DEPTH = 3;
@@ -288,15 +292,15 @@ export class StickerCommand extends CommandInterface {
         customAuthor = authorMatch[1].replace(/['"]/g, "");
       }
 
-      // Strip the pack/author/crop flags from the raw command text so only
-      // the actual media source (URL or search keywords) is left behind.
       const cleanCommandText = fullArgs
         .replace(/--pack\s+([^'"\s]+|'[^']+'|"[^"]+")/g, "")
         .replace(/--author\s+([^'"\s]+|'[^']+'|"[^"]+")/g, "")
         .replace(/--(c(rop)?|kotak)/g, "")
         .trim();
 
-      const parsedArgs = cleanCommandText ? cleanCommandText.split(/\s+/) : [];
+      const mediaArgs = cleanCommandText ? cleanCommandText.split(/\s+/) : [];
+      const includeAudio = mediaArgs.includes("--audio");
+      const parsedArgs = mediaArgs.filter((arg) => arg !== "--audio");
 
       if ((customPack || customAuthor) && !isVip) {
         await sock.sendMessage(jid, {
@@ -575,19 +579,38 @@ export class StickerCommand extends CommandInterface {
       const processorPath = getProcessorPath();
 
       try {
+        const mediaInput = new Uint8Array(mediaBuffer);
+        let audio: Buffer | undefined;
+        if (includeAudio) {
+          const extractedAudio = mediaType === "video"
+            ? await workerPool.run<Uint8Array | null>(
+              processorPath,
+              "extractStickerAudio",
+              [mediaInput],
+            )
+            : null;
+          if (!extractedAudio?.length) {
+            await sock.sendMessage(jid, {
+              text: `${config.emoji.error} Opsi *--audio* butuh video dengan suara. Coba kirim atau reply video yang ada audionya ya 🎵`,
+            });
+            return;
+          }
+          audio = Buffer.from(extractedAudio);
+        }
+
         if (mediaType === "video") {
           // Create animated sticker from video
           const result = await workerPool.run<Uint8Array>(
             processorPath,
             "createAnimatedSticker",
-            [new Uint8Array(mediaBuffer), useCrop, sourceExtension],
+            [mediaInput, useCrop, sourceExtension],
           );
           stickerBuffer = Buffer.from(result);
         } else {
           const result = await workerPool.run<Uint8Array>(
             processorPath,
             "createSticker",
-            [new Uint8Array(mediaBuffer), useCrop],
+            [mediaInput, useCrop],
           );
           stickerBuffer = Buffer.from(result);
         }
@@ -603,17 +626,25 @@ export class StickerCommand extends CommandInterface {
             new Uint8Array(stickerBuffer),
             sanitizedPackName,
             sanitizedAuthorName,
+            audio && createHash("sha256").update(audio).digest("base64"),
           ],
         );
 
-        // Send sticker.
-        // `isAnimated` must be set explicitly: Baileys does not derive it from
-        // the file, and WhatsApp Web uses it to pick the animated sticker
-        // renderer instead of showing a still frame.
-        await sock.sendMessage(jid, {
-          sticker: Buffer.from(exifResult),
-          isAnimated: mediaType === "video",
-        });
+        const sticker = Buffer.from(exifResult);
+        if (audio) {
+          if (sticker.length > this.MAX_SOUND_STICKER_BYTES) {
+            await sock.sendMessage(jid, {
+              text: `${config.emoji.error} Sticker bersuaranya terlalu besar. Coba potong videonya lebih pendek ya!`,
+            });
+            return;
+          }
+          await sendSoundSticker(sock, jid, sticker, audio);
+        } else {
+          await sock.sendMessage(jid, {
+            sticker,
+            isAnimated: mediaType === "video",
+          });
+        }
 
         log.info(`Sticker created for user ${user} in ${jid}`);
       } catch (workerError) {

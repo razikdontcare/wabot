@@ -1,9 +1,9 @@
 # SYSTEM_MAP.md
 
 ## Metadata
-- **map_version**: 1.1.0
-- **last_updated**: 2026-11-11
-- **last_updated_by**: agent/runtime-migration
+- **map_version**: 1.2.0
+- **last_updated**: 2026-11-26
+- **last_updated_by**: agent/01a21754-4212-7f93-8b07-e2ad8360a330
 
 ## Project Overview
 WhatsApp bot with AI integration and modular command system. Built with TypeScript/Bun, using Baileys for WhatsApp connectivity and Hono for the API dashboard. Production and Docker execute the TypeScript sources directly (`bun src/index.ts`); there is no compile step and no `dist/` build. Built-in command classes ship as code, while admins can manage data-only custom commands and built-in overrides from the web console (Mongo-backed).
@@ -55,7 +55,8 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 ### Application Layer
 | Path | Purpose | Exports | #layer | #domain |
 | :--- | :--- | :--- | :--- | :--- |
-| `src/app/client/BotClient.ts` | Manages WA connection and event routing | `BotClient` | #app | #bot |
+| `src/app/client/BotClient.ts` | Manages WA connection and event routing and installs the sound-sticker encoder for new sends and retries | `BotClient` | #app | #bot |
+| `src/app/commands/StickerCommand.ts` | Converts images, videos, and GIFs to WhatsApp stickers. `--audio` attaches Opus audio from the source video | `StickerCommand` | #app | #utils |
 | `src/app/handlers/CommandHandler.ts` | Dispatches commands through the shared command registry: core commands, permissions, VIP/roles, cooldowns, AI tool execution, help/games listing | `CommandHandler` | #app | #bot |
 | `src/app/handlers/CommandInterface.ts` | Command structure definitions (`commandClass` optional since data-only custom commands have no class) | `CommandInterface`, `CommandInfo` | #app | #bot |
 | `src/app/handlers/DynamicCommand.ts` | Executes an admin-created data-only custom command by rendering its stored `{{placeholder}}` response template (never executes web-supplied code) | `DynamicCommand` | #app | #bot |
@@ -122,11 +123,13 @@ WhatsApp bot with AI integration and modular command system. Built with TypeScri
 | `src/shared/utils/ai_agent_tools.ts` | [DELETED 2026-06-16] Filesystem, execution and web tools for AI agents | N/A | #shared | #ai |
 | `src/shared/utils/whatsapp_formatter.ts` | Formats standard Markdown to WhatsApp-compatible markup | `formatResponseForWhatsApp` | #shared | #utils |
 | `src/shared/utils/ytdlp.ts` | YouTube download utility | `ytdlp` | #shared | #utils |
-| `src/shared/utils/stickerProcessor.ts` | Sticker encoding: still (sharp) and animated (ffmpeg/libwebp_anim) WebP, EXIF pack metadata, WebP container normalisation for WhatsApp Web transparency | `addExif`, `createSticker`, `createAnimatedSticker`, `normalizeStickerWebp` | #shared | #utils |
+| `src/shared/utils/stickerProcessor.ts` | Encodes WebP stickers, extracts up to 10 seconds of mono Opus audio, writes pack and sound metadata, and normalizes WebP transparency | `addExif`, `createSticker`, `createAnimatedSticker`, `extractStickerAudio`, `normalizeStickerWebp` | #shared | #utils |
+| `src/shared/utils/soundSticker.ts` | Uploads sticker and audio media through Baileys and adds protobuf wrapper 134 when encoding outbound sound stickers. Uses the shared socket type and app logger | `installSoundStickerEncoder`, `sendSoundSticker` | #shared | #utils |
+| `tests/soundSticker.test.ts` | Verifies sound-sticker wire bytes, linked-device envelopes, FFmpeg output, media uploads, and BSON retry data using the sticker processor and adapter | N/A | #tests | #utils |
 | `src/shared/utils/sourcePaths.ts` | Resolves worker-only modules from the TypeScript sources (`src/...`) instead of a compiled `dist/` layout | `resolveSourceModule`, `resolveWorkerScriptPath` | #shared | #utils |
 | `src/shared/utils/commandLoader.ts` | Runtime-agnostic discovery of built-in command classes at boot: lists `.ts`/`.js` files (skips `.d.ts`/subdirectories) and dynamically imports each `static commandInfo` (dedupes names, warns on invalid exports) | `selectCommandFiles`, `loadBuiltinCommands` | #shared | #utils |
 | `src/shared/utils/commandTemplates.ts` | Renders and validates admin-managed `{{placeholder}}` response templates (`args`, `arg1`…`arg9`, `user`, `chat`, `prefix`, `botname`, `date`, `time`, `command`) | `COMMAND_TEMPLATE_PLACEHOLDERS`, `renderCommandTemplate`, `validateCommandTemplate`, `CommandTemplateContext` | #shared | #utils |
-| `src/shared/utils/commandCapture.ts` | Socket proxy that records the chat messages a bot command sends, so the AI can see command output and detect handled failures (❌ replies) | `createCommandCapture`, `classifyCommandOutcome`, `CapturedCommandMessage` | #shared | #ai |
+| `src/shared/utils/commandCapture.ts` | Socket proxy that records command output, including relayed stickers, so the AI can see deliveries and handled failures (❌ replies) | `createCommandCapture`, `classifyCommandOutcome`, `CapturedCommandMessage` | #shared | #ai |
 | `src/shared/utils/groupDirectory.ts` | Joined-group directory: cached group listing, name/JID resolution, and group text sending used by the AI tools and `announce` | `fetchJoinedGroups`, `resolveGroup`, `sendGroupText`, `GroupSummary` | #shared | #utils |
 | `src/shared/utils/userRoles.ts` | Role lookup that considers both the JID and LID identities Baileys may attach to a message | `getEffectiveUserIds`, `getUserRolesConsideringAlt`, `isAdminConsideringAlt` | #shared | #utils |
 
@@ -189,6 +192,7 @@ starts empty, and deleting documents (or rolling back the image) leaves inert da
 - **Convention**: VIP-only providers (e.g. `deepseek`) are gated in `AskAICommand.handleProviderCommand` — the router itself is provider-agnostic.
 - **Gotcha**: `POST /api/send-message` normalizes bare E.164 numbers to `@s.whatsapp.net` and only accepts `@s.whatsapp.net`/`@lid`/`@g.us`/`@broadcast`/`@newsletter` suffixes; it is rate limited in-memory per IP (see `docs/SEND_MESSAGE_API.md`).
 - **Runtime**: Production/Docker run `bun src/index.ts` directly (Bun `1.3.14`). There is no compile step and no `dist/`; `bun run typecheck` is `tsc --noEmit` only. Keep relative imports with `.js` extensions — Bun resolves them to `.ts`.
+- **Sound stickers**: Baileys 7.0.0-rc13 routes the outgoing object as ordinary sticker media. The encoder wraps it in field 134 just before serialization and uses the stored audio metadata for retries ([Baileys #2932](https://github.com/WhiskeySockets/Baileys/issues/2932)).
 - **Command discovery**: Built-in commands are TypeScript classes in `src/app/commands/` exposing `static commandInfo`, discovered at boot by `commandLoader` (`.ts`/`.js`, `.d.ts` and subdirectories skipped). Worker-only modules resolve from `src/` through `sourcePaths`. New command *behaviour* always ships as code.
 - **Web command management**: `CommandRegistryService` merges code commands with Mongo overrides/custom commands; the `getCommandRegistry()` singleton is shared by `CommandHandler` and the HTTP API, so writes refresh the in-process cache synchronously while other replicas pick changes up within the 30 s cache TTL.
 - **Custom commands are data, not code**: never execute code supplied from the web console. Custom commands are `{{placeholder}}` text templates validated at save time, and the console renders API strings with `textContent` (never `innerHTML`).
@@ -243,3 +247,4 @@ starts empty, and deleting documents (or rolling back the image) leaves inert da
 - **2026-10-27** [patch] (agent/zed): Fixed the release workflow failing at `oven-sh/setup-bun@v1` with HTTP 403 from `bun.sh/download`. It now uses `setup-bun@v2` with Bun pinned to `1.3.14` (v2 downloads the GitHub release asset and skips tag resolution), and the Docker builder pins the same Bun version for parity.
 - **2026-11-11** [minor] (agent/runtime-migration): Production and Docker now execute the TypeScript entrypoint directly with Bun `1.3.14` (`bun src/index.ts`): no `tsc` build and no `dist/` in the image. Added runtime-agnostic built-in discovery (`commandLoader`) and worker source-path resolution (`sourcePaths`), made `tsconfig.json` non-emitting (`tsc --noEmit` is typecheck-only), rewrote the Dockerfile as a two-stage Bun image, and added a typecheck step to the release workflow.
 - **2026-11-11** [minor] (agent/runtime-migration): Added Mongo-backed web command management: `CommandRegistryService` + `bot_commands` collection merge built-in code commands with admin overrides and data-only custom commands (`{{placeholder}}` response templates, 1–4096 chars), shared through a `getCommandRegistry()` singleton between the bot and the API (immediate in-process refresh, 30 s cross-replica TTL). Exposed six `/api/commands` routes and a Commands section in the `/admin` console, with Basic Auth, collision/template validation and no code execution from the UI. Added `docs/COMMANDS.md`.
+- **2026-11-26** [minor] (agent/01a21754-4212-7f93-8b07-e2ad8360a330): Added `sticker --audio` to send animated WebP stickers with audio from the source video.

@@ -26,6 +26,7 @@ import {
 } from "../../infrastructure/config/mongo.js";
 import NodeCache from "node-cache";
 import { setCommandHandler } from "../../shared/utils/ai_tools.js";
+import { installSoundStickerEncoder } from "../../shared/utils/soundSticker.js";
 
 // Import the broadcast function
 
@@ -141,6 +142,7 @@ export class BotClient {
         setCommandHandler(this.commandHandler);
         log.info("CommandHandler re-initialized successfully");
 
+        installSoundStickerEncoder();
         // Create a new socket connection
         this.sock = makeWASocket({
           auth: state,
@@ -167,10 +169,10 @@ export class BotClient {
                   ? `${BotConfig.sessionName}_dev`
                   : BotConfig.sessionName;
                 const db = activeClient.db(dbName);
-                const doc = await db.collection("messages").findOne({
-                  remoteJid: key.remoteJid,
-                  id: key.id
-                });
+                const doc = await db.collection("messages").findOne(
+                  { remoteJid: key.remoteJid, id: key.id },
+                  { promoteBuffers: true },
+                );
                 return (doc?.message as proto.IMessage) || undefined;
               } catch (error) {
                 log.error("Failed to get message from database:", error);
