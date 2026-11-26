@@ -81,6 +81,21 @@ function makeVideoFixture(withAudio: boolean): Buffer {
   ]);
 }
 
+it("converts a standalone MP3 to a sticker audio track", async () => {
+  const mp3 = execFileSync("ffmpeg", [
+    "-v", "error", "-f", "lavfi", "-i", "sine=frequency=880", "-t", "1",
+    "-f", "mp3", "pipe:1",
+  ]);
+  const sound = await extractStickerAudio(mp3);
+  if (!sound) throw new Error("Expected audio in the MP3 fixture");
+
+  const codec = execFileSync("ffprobe", [
+    "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name",
+    "-of", "csv=p=0", "pipe:0",
+  ], { input: sound, encoding: "utf8" });
+  expect(codec.trim()).toBe("opus");
+});
+
 it("relays a video with identical frames as an animated sticker with matching Opus audio", async () => {
   expect(await extractStickerAudio(makeVideoFixture(false))).toBeNull();
   const video = makeVideoFixture(true);

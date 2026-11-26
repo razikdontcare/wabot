@@ -97,7 +97,10 @@ function animatedFrameHasAlpha(
  *    honour it fill the canvas with white, so transparent areas (padding and
  *    holes in the artwork) turn into white squares on WhatsApp Web.
  */
-export function normalizeStickerWebp(input: Uint8Array): Uint8Array {
+export function normalizeStickerWebp(
+  input: Uint8Array,
+  preserveAnimationBackground = false,
+): Uint8Array {
   const data = Buffer.from(input);
   const chunks = parseRiffChunks(data);
   if (!chunks) return input;
@@ -119,7 +122,7 @@ export function normalizeStickerWebp(input: Uint8Array): Uint8Array {
   }
 
   const anim = chunks.find(({ fourCC }) => fourCC === "ANIM");
-  if (anim && anim.size >= ANIM_BACKGROUND_SIZE) {
+  if (!preserveAnimationBackground && anim && anim.size >= ANIM_BACKGROUND_SIZE) {
     data.fill(0, anim.payloadOffset, anim.payloadOffset + ANIM_BACKGROUND_SIZE);
   }
 
@@ -134,6 +137,7 @@ export async function addExif(
   packname: string,
   author: string,
   soundSha256?: string,
+  preserveAnimationBackground = false,
 ): Promise<Uint8Array> {
   try {
     const source = Buffer.from(webpBuffer);
@@ -159,12 +163,16 @@ export async function addExif(
     img.exif = exif;
 
     // libwebp can collapse identical video frames to a still WebP.
-    const result = soundSha256 && !img.hasAnim
+    const alreadyAnimated = img.hasAnim;
+    const result = soundSha256 && !alreadyAnimated
       ? await img.save(null, { frames: [{ buffer: source }], delay: 1000 })
       : await img.save(null);
     // Re-muxing drops the VP8X alpha flag of animations, restore it before
     // the sticker is sent (WhatsApp Web needs it to keep transparency).
-    return normalizeStickerWebp(new Uint8Array(result));
+    return normalizeStickerWebp(
+      new Uint8Array(result),
+      preserveAnimationBackground && alreadyAnimated,
+    );
   } catch (error) {
     if (soundSha256) throw error;
     log.warn("Failed to add EXIF to sticker:", error);
@@ -310,14 +318,14 @@ export async function createAnimatedSticker(
 }
 
 export async function extractStickerAudio(
-  videoBuffer: Uint8Array,
+  mediaBuffer: Uint8Array,
 ): Promise<Uint8Array | null> {
   const tempBase = join(tmpdir(), `sticker_audio_${randomUUID()}`);
-  const inputPath = `${tempBase}.video`;
+  const inputPath = `${tempBase}.media`;
   const outputPath = `${tempBase}.ogg`;
 
   try {
-    await fs.writeFile(inputPath, videoBuffer);
+    await fs.writeFile(inputPath, mediaBuffer);
     const { stdout } = await execFileAsync("ffprobe", [
       "-v", "error",
       "-select_streams", "a:0",
