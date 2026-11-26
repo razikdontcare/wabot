@@ -10,6 +10,7 @@ import {
   proto,
 } from "baileys";
 import { CommandHandler } from "../handlers/CommandHandler.js";
+import { handleStickerAudioReply } from "../handlers/stickerAudioReplies.js";
 import { SessionService } from "../../domain/services/SessionService.js";
 import {
   BotConfig,
@@ -348,6 +349,8 @@ export class BotClient {
             // Get current config for allowFromMe check
             const config = await getCurrentConfig().catch(() => BotConfig);
             if (m.key.fromMe && !config.allowFromMe) continue;
+            if (await handleStickerAudioReply(this.sock!, baseJid, baseUser, m))
+              continue;
 
             const mentionedJids = [
               ...(m.message?.extendedTextMessage?.contextInfo?.mentionedJid ||

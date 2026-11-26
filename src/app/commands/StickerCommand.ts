@@ -1,5 +1,6 @@
 import { downloadMediaMessage, proto, WAMessage } from "baileys";
 import { CommandInfo, CommandInterface } from "../handlers/CommandInterface.js";
+import { requestStickerAudio } from "../handlers/stickerAudioReplies.js";
 import {
   BotConfig,
   getCurrentConfig,
@@ -17,7 +18,10 @@ import {
 } from "../../shared/utils/fetchClient.js";
 import { WorkerPool } from "../../shared/utils/WorkerPool.js";
 import { resolveSourceModule } from "../../shared/utils/sourcePaths.js";
-import { sendSoundSticker } from "../../shared/utils/soundSticker.js";
+import {
+  MAX_SOUND_STICKER_BYTES,
+  sendSoundSticker,
+} from "../../shared/utils/soundSticker.js";
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 
@@ -42,7 +46,8 @@ export class StickerCommand extends CommandInterface {
 
 *Opsi:*
 • *${BotConfig.prefix}sticker --crop* — Crop ke tengah (512x512)
-• *${BotConfig.prefix}sticker --audio* — Buat sticker bersuara dari video dengan audio
+• *${BotConfig.prefix}sticker --audio* — Ambil suara dari video atau balas gambar/sticker WebP untuk memasangkan audio terpisah
+• Untuk gambar/sticker WebP, balas pesan bot dengan voice note atau file audio
 • Default: auto-fit dengan padding putih
 
 *Batasan:*
@@ -70,7 +75,6 @@ export class StickerCommand extends CommandInterface {
   };
 
   private readonly MAX_FILE_SIZE = 16 * 1024 * 1024; // 16MB
-  private readonly MAX_SOUND_STICKER_BYTES = 950_000;
   private readonly STICKER_SIZE = 512;
   private readonly URL_FETCH_TIMEOUT = 20000;
   private readonly MAX_REDIRECT_DEPTH = 3;
@@ -344,6 +348,18 @@ export class StickerCommand extends CommandInterface {
         args.includes("c") ||
         args.includes("kotak");
 
+      if (
+        includeAudio &&
+        await requestStickerAudio(sock, jid, user, msg as WAMessage, {
+          useCrop,
+          packName: this.sanitizePackName(packName),
+          authorName: this.sanitizePackName(authorName),
+          errorEmoji: config.emoji.error,
+        })
+      ) {
+        return;
+      }
+
       let mediaBuffer: Buffer | null = null;
       let mediaType: "image" | "video" | null = null;
       let sourceExtension = "mp4";
@@ -591,7 +607,7 @@ export class StickerCommand extends CommandInterface {
             : null;
           if (!extractedAudio?.length) {
             await sock.sendMessage(jid, {
-              text: `${config.emoji.error} Opsi *--audio* butuh video dengan suara. Coba kirim atau reply video yang ada audionya ya 🎵`,
+              text: `${config.emoji.error} Pakai video yang ada suaranya, atau reply gambar/sticker WebP di chat untuk memasangkan audio terpisah 🎵`,
             });
             return;
           }
@@ -632,7 +648,7 @@ export class StickerCommand extends CommandInterface {
 
         const sticker = Buffer.from(exifResult);
         if (audio) {
-          if (sticker.length > this.MAX_SOUND_STICKER_BYTES) {
+          if (sticker.length > MAX_SOUND_STICKER_BYTES) {
             await sock.sendMessage(jid, {
               text: `${config.emoji.error} Sticker bersuaranya terlalu besar. Coba potong videonya lebih pendek ya!`,
             });

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeStickerWebp } from "../src/shared/utils/stickerProcessor.js";
+import sharp from "sharp";
+import webpmux from "node-webpmux";
+import { addExif, normalizeStickerWebp } from "../src/shared/utils/stickerProcessor.js";
 
 const VP8X_ALPHA_FLAG = 0x10;
 const VP8X_ANIM_FLAG = 0x02;
@@ -62,6 +64,39 @@ function readAnimBackground(data: Buffer): Buffer {
   const index = data.indexOf(Buffer.from("ANIM", "ascii"));
   return data.subarray(index + 8, index + 12);
 }
+
+function readAnimationFrames(data: Buffer): Buffer[] {
+  const frames: Buffer[] = [];
+  for (let offset = 12; offset + 8 <= data.length;) {
+    const size = data.readUInt32LE(offset + 4);
+    if (data.toString("ascii", offset, offset + 4) === "ANMF") {
+      frames.push(data.subarray(offset + 8, offset + 8 + size));
+    }
+    offset += 8 + size + (size % 2);
+  }
+  return frames;
+}
+
+it("keeps the existing WebP frames and animation background when adding sound", async () => {
+  const frames = await Promise.all(["red", "blue"].map(async (background) => ({
+    buffer: await sharp({ create: { width: 16, height: 16, channels: 3, background } })
+      .webp()
+      .toBuffer(),
+  })));
+  const sticker = await webpmux.Image.save(null, {
+    frames,
+    width: 16,
+    height: 16,
+    bgColor: [30, 70, 130, 255],
+    delay: 150,
+  });
+
+  const tagged = Buffer.from(await addExif(sticker, "Pack", "Author", "sound-hash", true));
+
+  expect(readAnimationFrames(sticker)).toHaveLength(2);
+  expect(readAnimationFrames(tagged)).toEqual(readAnimationFrames(sticker));
+  expect(readAnimBackground(tagged)).toEqual(readAnimBackground(sticker));
+});
 
 describe("normalizeStickerWebp", () => {
   it("restores the VP8X alpha flag dropped when re-muxing an animation", () => {

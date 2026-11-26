@@ -8,6 +8,8 @@ import type { WebSocketInfo } from "../types/types.js";
 
 type SoundStickerMessage = proto.IMessage & { soundStickerAudio?: string };
 
+export const MAX_SOUND_STICKER_BYTES = 950_000;
+
 const SOUND_STICKER_FIELD = 134;
 const WRAPPED_MESSAGE_FIELD = 1;
 const STICKER_FIELD = 26;
